@@ -1,0 +1,52 @@
+import type { Metadata } from "next";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { Toaster } from "@/components/ui/sonner";
+import { DesktopSidebar, MobileSidebar } from "@/components/sidebar";
+import "./globals.css";
+
+const inter = Inter({
+  variable: "--font-sans",
+  subsets: ["latin"],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "QuantSense – Trading Dashboard",
+  description: "AI-powered quantitative trading dashboard",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html
+      lang="en"
+      className={`${inter.variable} ${jetbrainsMono.variable} dark h-full antialiased`}
+    >
+      <body className="min-h-full bg-background text-foreground">
+        <DesktopSidebar />
+
+        {/* Main content area, offset by sidebar width on desktop */}
+        <div className="md:pl-56 min-h-screen flex flex-col">
+          {/* Mobile header */}
+          <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-zinc-800/60 bg-background/80 px-4 backdrop-blur-md md:hidden">
+            <MobileSidebar />
+            <span className="text-sm font-semibold tracking-tight text-zinc-100">
+              QuantSense
+            </span>
+          </header>
+
+          <main className="flex-1 p-4 md:p-6">{children}</main>
+        </div>
+
+        <Toaster position="bottom-right" />
+      </body>
+    </html>
+  );
+}

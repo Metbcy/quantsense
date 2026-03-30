@@ -1,0 +1,8 @@
+[project]
+name = "quantsense-backend"
+version = "1.0.0"
+description = "AI-powered quantitative trading platform backend"
+requires-python = ">=3.10"
+
+[tool.pytest]
+testpaths = ["tests"]

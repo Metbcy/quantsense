@@ -1,0 +1,53 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings
+from typing import Optional
+
+
+class Settings(BaseSettings):
+    DATABASE_URL: str = "sqlite:///./quantsense.db"
+
+    ALPHA_VANTAGE_API_KEY: Optional[str] = None
+    NEWSAPI_KEY: Optional[str] = None
+    REDDIT_CLIENT_ID: Optional[str] = None
+    REDDIT_CLIENT_SECRET: Optional[str] = None
+    GROQ_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: Optional[str] = None
+    ANTHROPIC_API_KEY: Optional[str] = None
+
+    PAPER_TRADING_INITIAL_CASH: float = 100000.0
+    SENTIMENT_REFRESH_MINUTES: int = 30
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+    @property
+    def groq_api_key(self) -> str:
+        return self.GROQ_API_KEY or ""
+
+    @property
+    def openai_api_key(self) -> str:
+        return self.OPENAI_API_KEY or ""
+
+    @property
+    def anthropic_api_key(self) -> str:
+        return self.ANTHROPIC_API_KEY or ""
+
+    @property
+    def newsapi_key(self) -> str:
+        return self.NEWSAPI_KEY or ""
+
+    @property
+    def reddit_client_id(self) -> str:
+        return self.REDDIT_CLIENT_ID or ""
+
+    @property
+    def reddit_client_secret(self) -> str:
+        return self.REDDIT_CLIENT_SECRET or ""
+
+
+settings = Settings()
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
