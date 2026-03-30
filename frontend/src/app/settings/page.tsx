@@ -224,16 +224,14 @@ export default function SettingsPage() {
           </div>
 
           <Dialog>
-            <DialogTrigger
-              render={
-                <Button
-                  variant="destructive"
-                  className="bg-red-500/10 text-red-400 hover:bg-red-500/20"
-                />
-              }
-            >
-              <RotateCcw className="mr-2 size-4" />
-              Reset Portfolio
+            <DialogTrigger asChild>
+              <Button
+                variant="destructive"
+                className="bg-red-500/10 text-red-400 hover:bg-red-500/20"
+              >
+                <RotateCcw className="mr-2 size-4" />
+                Reset Portfolio
+              </Button>
             </DialogTrigger>
             <DialogContent className="border-zinc-700 bg-zinc-900">
               <DialogHeader>
@@ -244,10 +242,10 @@ export default function SettingsPage() {
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <DialogClose
-                  render={<Button variant="outline" className="border-zinc-700 text-zinc-300" />}
-                >
-                  Cancel
+                <DialogClose asChild>
+                  <Button variant="outline" className="border-zinc-700 text-zinc-300">
+                    Cancel
+                  </Button>
                 </DialogClose>
                 <Button
                   onClick={handleReset}
