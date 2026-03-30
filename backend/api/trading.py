@@ -18,6 +18,11 @@ _broker = PaperBroker()
 _provider = YahooFinanceProvider()
 
 
+def _get_broker() -> PaperBroker:
+    """Get the shared paper broker instance."""
+    return _broker
+
+
 @router.post("/order")
 async def submit_order(req: OrderRequest):
     """Submit a paper-trading order."""

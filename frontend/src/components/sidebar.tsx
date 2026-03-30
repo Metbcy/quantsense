@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   FlaskConical,
   Brain,
+  Bot,
   Settings,
   Menu,
   TrendingUp,
@@ -24,6 +25,7 @@ const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/backtest", label: "Backtest", icon: FlaskConical },
   { href: "/sentiment", label: "Sentiment", icon: Brain },
+  { href: "/auto-trade", label: "AI Trader", icon: Bot },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 

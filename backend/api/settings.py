@@ -54,22 +54,22 @@ async def remove_from_watchlist(ticker: str, db: Session = Depends(get_db)):
 # ── App Settings ─────────────────────────────────────────────────────
 
 
-@router.get("/config", response_model=list[SettingResponse])
+@router.get("/config")
 async def get_config(db: Session = Depends(get_db)):
-    """Get all app settings."""
-    return db.query(AppSetting).all()
+    """Get all app settings as a key-value dict."""
+    settings = db.query(AppSetting).all()
+    return {s.key: s.value for s in settings}
 
 
-@router.put("/config", response_model=SettingResponse)
-async def update_config(req: SettingUpdate, db: Session = Depends(get_db)):
-    """Create or update an app setting."""
-    setting = db.query(AppSetting).filter(AppSetting.key == req.key).first()
-    if setting:
-        setting.value = req.value
-    else:
-        setting = AppSetting(key=req.key, value=req.value)
-        db.add(setting)
-
+@router.put("/config")
+async def update_config(data: dict, db: Session = Depends(get_db)):
+    """Bulk create/update app settings from a key-value dict."""
+    for key, value in data.items():
+        setting = db.query(AppSetting).filter(AppSetting.key == key).first()
+        if setting:
+            setting.value = str(value)
+        else:
+            setting = AppSetting(key=key, value=str(value))
+            db.add(setting)
     db.commit()
-    db.refresh(setting)
-    return setting
+    return {"detail": "Settings saved"}

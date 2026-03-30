@@ -103,32 +103,40 @@ class NewsAPIFetcher(NewsFetcher):
 
 
 class YahooNewsFetcher(NewsFetcher):
-    """Parse Yahoo Finance RSS feed — no API key required."""
-
-    RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+    """Fetch news from yfinance Ticker.news — no API key required."""
 
     def is_available(self) -> bool:
         return True
 
     async def fetch(self, ticker: str, limit: int = 20) -> list[NewsItem]:
         try:
-            import feedparser
+            import asyncio
+            import yfinance as yf
 
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(self.RSS_URL.format(ticker=ticker))
-                resp.raise_for_status()
+            t = await asyncio.to_thread(lambda: yf.Ticker(ticker))
+            news = await asyncio.to_thread(lambda: t.news)
+            if not news:
+                return []
 
-            feed = feedparser.parse(resp.text)
             items: list[NewsItem] = []
-            for entry in feed.entries[:limit]:
-                pub = entry.get("published", "")
+            for article in news[:limit]:
+                # yfinance 1.2+ nests data under 'content'
+                content = article.get("content", article)
+                title = content.get("title", "")
+                if not title:
+                    continue
+                pub_str = content.get("pubDate") or content.get("displayTime") or ""
+                pub_dt = _safe_parse_dt(pub_str) if pub_str else datetime.now(timezone.utc)
+                summary = content.get("summary", "") or content.get("description", "") or ""
+                link = content.get("canonicalUrl", {})
+                url = link.get("url", "") if isinstance(link, dict) else str(link)
                 items.append(
                     NewsItem(
-                        headline=entry.get("title", ""),
-                        snippet=entry.get("summary", ""),
+                        headline=title,
+                        snippet=summary[:500],
                         source="yahoo",
-                        url=entry.get("link", ""),
-                        published_at=_safe_parse_dt(pub),
+                        url=url,
+                        published_at=pub_dt,
                         ticker=ticker,
                     )
                 )
@@ -156,17 +164,20 @@ class RedditFetcher(NewsFetcher):
     async def fetch(self, ticker: str, limit: int = 20) -> list[NewsItem]:
         items: list[NewsItem] = []
         per_sub = max(limit // len(self.SUBREDDITS), 5)
+        ticker_upper = ticker.upper()
+        # Use $TICKER format for more specific search
+        query = f"${ticker_upper} OR {ticker_upper}"
         try:
-            async with httpx.AsyncClient(timeout=15, headers=self.HEADERS) as client:
+            async with httpx.AsyncClient(timeout=15, headers=self.HEADERS, follow_redirects=True) as client:
                 for sub in self.SUBREDDITS:
                     try:
                         resp = await client.get(
                             self.SEARCH_URL.format(sub=sub),
                             params={
-                                "q": ticker,
+                                "q": query,
                                 "restrict_sr": "on",
                                 "sort": "new",
-                                "limit": per_sub,
+                                "limit": per_sub * 2,
                                 "t": "week",
                             },
                         )
@@ -185,11 +196,17 @@ class RedditFetcher(NewsFetcher):
 
                     for post in data.get("data", {}).get("children", []):
                         pd = post.get("data", {})
+                        title = pd.get("title", "")
+                        selftext = pd.get("selftext", "") or ""
+                        # Filter: ticker must appear in title or body
+                        combined = f"{title} {selftext}".upper()
+                        if ticker_upper not in combined and f"${ticker_upper}" not in combined:
+                            continue
                         created = pd.get("created_utc", 0)
                         items.append(
                             NewsItem(
-                                headline=pd.get("title", ""),
-                                snippet=(pd.get("selftext", "") or "")[:500],
+                                headline=title,
+                                snippet=selftext[:500],
                                 source="reddit",
                                 url=f"https://reddit.com{pd.get('permalink', '')}",
                                 published_at=datetime.fromtimestamp(

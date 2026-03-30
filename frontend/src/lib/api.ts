@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // ── Type definitions ──────────────────────────────────────────────────────────
 
@@ -148,6 +148,51 @@ export interface BacktestRequest {
   params?: Record<string, number>;
 }
 
+export interface AutoTradeDecision {
+  ticker: string;
+  action: string;
+  quantity: number;
+  price: number;
+  confidence: number;
+  reasons: string[];
+}
+
+export interface AutoTradeExecution {
+  ticker: string;
+  action: string;
+  status: string;
+  filled_price?: number;
+  quantity?: number;
+  confidence?: number;
+  reasons: string[];
+}
+
+export interface AutoTradeResult {
+  timestamp: string;
+  decisions: AutoTradeDecision[];
+  executions: AutoTradeExecution[];
+  portfolio: {
+    total_value: number;
+    cash: number;
+    positions_count: number;
+    total_pnl: number;
+    total_pnl_pct: number;
+  };
+}
+
+export interface AutoTradeAnalysis {
+  analyses: {
+    ticker: string;
+    price?: number;
+    sentiment_score?: number;
+    rsi?: number | null;
+    sma_20?: number | null;
+    signal: string;
+    confidence: number;
+    reasons: string[];
+  }[];
+}
+
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
 async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -232,6 +277,11 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+  },
+
+  autoTrade: {
+    run: () => fetchJson<AutoTradeResult>('/auto-trade/run', { method: 'POST' }),
+    analyze: () => fetchJson<AutoTradeAnalysis>('/auto-trade/analyze', { method: 'POST' }),
   },
 };
 

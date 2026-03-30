@@ -24,7 +24,7 @@ provider = YahooFinanceProvider()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/run", response_model=BacktestResponse)
+@router.post("/run")
 async def run(req: BacktestRequest, db: Session = Depends(get_db)):
     """Run a backtest for a given strategy and ticker."""
     # 1. Validate strategy type
@@ -113,23 +113,67 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_result)
 
-    return db_result
+    # Build response matching frontend expected shape
+    return _format_result(db_result, req.strategy_type, result.equity_curve)
 
 
-@router.get("/results", response_model=list[BacktestResponse])
+def _format_result(db_result, strategy_type: str = "", equity_curve=None):
+    """Format a DB backtest result into the frontend-expected shape."""
+    trades = [
+        {
+            "date": str(t.date),
+            "side": t.side,
+            "price": t.price,
+            "quantity": t.quantity,
+            "value": t.value,
+            "pnl": t.pnl,
+        }
+        for t in db_result.trades
+    ]
+    # Resolve strategy_type from DB if not passed
+    if not strategy_type and db_result.strategy:
+        strategy_type = db_result.strategy.type or db_result.strategy.name
+    return {
+        "id": db_result.id,
+        "ticker": db_result.ticker,
+        "strategy_type": strategy_type,
+        "start_date": str(db_result.start_date),
+        "end_date": str(db_result.end_date),
+        "created_at": db_result.created_at.isoformat() if db_result.created_at else None,
+        "metrics": {
+            "initial_capital": db_result.initial_capital,
+            "final_value": db_result.final_value,
+            "total_return_pct": db_result.total_return_pct,
+            "sharpe_ratio": db_result.sharpe_ratio,
+            "max_drawdown_pct": db_result.max_drawdown_pct,
+            "win_rate": db_result.win_rate,
+            "total_trades": db_result.total_trades,
+            "avg_trade_pnl": 0,
+            "best_trade_pnl": 0,
+            "worst_trade_pnl": 0,
+            "profit_factor": 0,
+        },
+        "trades": trades,
+        "equity_curve": [
+            [str(d), v] for d, v in (equity_curve or [])
+        ],
+    }
+
+
+@router.get("/results")
 async def list_results(db: Session = Depends(get_db)):
     """List all saved backtest results."""
     results = db.query(BacktestResultModel).order_by(BacktestResultModel.created_at.desc()).all()
-    return results
+    return [_format_result(r) for r in results]
 
 
-@router.get("/results/{result_id}", response_model=BacktestResponse)
+@router.get("/results/{result_id}")
 async def get_result(result_id: int, db: Session = Depends(get_db)):
     """Get a specific backtest result with its trades."""
     result = db.query(BacktestResultModel).filter(BacktestResultModel.id == result_id).first()
     if result is None:
         raise HTTPException(status_code=404, detail="Backtest result not found")
-    return result
+    return _format_result(result)
 
 
 @router.delete("/results/{result_id}")

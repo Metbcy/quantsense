@@ -70,7 +70,14 @@ async def analyze_ticker(ticker: str, db: Session = Depends(get_db)):
         "llm_score": result.llm_score,
         "trend": result.trend,
         "num_sources": result.num_sources,
-        "headlines": result.headlines,
+        "updated_at": __import__("datetime").datetime.now().isoformat(),
+        "headlines": [
+            {
+                **h,
+                "published_at": h.get("published_at", __import__("datetime").datetime.now().isoformat()),
+            }
+            for h in result.headlines
+        ],
     }
 
 
@@ -118,31 +125,10 @@ async def sentiment_history(ticker: str, db: Session = Depends(get_db)):
         .first()
     )
 
-    return {
-        "ticker": ticker.upper(),
-        "items": [
-            {
-                "id": r.id,
-                "source": r.source,
-                "headline": r.headline,
-                "snippet": r.snippet,
-                "vader_score": r.vader_score,
-                "llm_score": r.llm_score,
-                "llm_summary": r.llm_summary,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in records
-        ],
-        "aggregate": (
-            {
-                "id": aggregate.id,
-                "ticker": aggregate.ticker,
-                "score": aggregate.score,
-                "trend": aggregate.trend,
-                "num_sources": aggregate.num_sources,
-                "updated_at": aggregate.updated_at.isoformat() if aggregate.updated_at else None,
-            }
-            if aggregate
-            else None
-        ),
-    }
+    return [
+        {
+            "date": r.created_at.isoformat() if r.created_at else None,
+            "score": r.vader_score,
+        }
+        for r in records
+    ]
