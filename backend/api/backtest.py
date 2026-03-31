@@ -114,10 +114,10 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
     db.refresh(db_result)
 
     # Build response matching frontend expected shape
-    return _format_result(db_result, req.strategy_type, result.equity_curve)
+    return _format_result(db_result, req.strategy_type, result.equity_curve, result.metrics)
 
 
-def _format_result(db_result, strategy_type: str = "", equity_curve=None):
+def _format_result(db_result, strategy_type: str = "", equity_curve=None, metrics_obj=None):
     """Format a DB backtest result into the frontend-expected shape."""
     trades = [
         {
@@ -133,6 +133,22 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None):
     # Resolve strategy_type from DB if not passed
     if not strategy_type and db_result.strategy:
         strategy_type = db_result.strategy.type or db_result.strategy.name
+
+    # Compute trade-level metrics from stored trades if not passed from engine
+    sell_pnls = [t.pnl for t in db_result.trades if t.pnl != 0]
+    avg_pnl = sum(sell_pnls) / len(sell_pnls) if sell_pnls else 0
+    best_pnl = max(sell_pnls) if sell_pnls else 0
+    worst_pnl = min(sell_pnls) if sell_pnls else 0
+    gross_profit = sum(p for p in sell_pnls if p > 0)
+    gross_loss = abs(sum(p for p in sell_pnls if p < 0))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else (999.0 if gross_profit > 0 else 0)
+
+    if metrics_obj:
+        avg_pnl = metrics_obj.avg_trade_pnl
+        best_pnl = metrics_obj.best_trade_pnl
+        worst_pnl = metrics_obj.worst_trade_pnl
+        profit_factor = metrics_obj.profit_factor
+
     return {
         "id": db_result.id,
         "ticker": db_result.ticker,
@@ -148,10 +164,10 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None):
             "max_drawdown_pct": db_result.max_drawdown_pct,
             "win_rate": db_result.win_rate,
             "total_trades": db_result.total_trades,
-            "avg_trade_pnl": 0,
-            "best_trade_pnl": 0,
-            "worst_trade_pnl": 0,
-            "profit_factor": 0,
+            "avg_trade_pnl": avg_pnl,
+            "best_trade_pnl": best_pnl,
+            "worst_trade_pnl": worst_pnl,
+            "profit_factor": profit_factor,
         },
         "trades": trades,
         "equity_curve": [
