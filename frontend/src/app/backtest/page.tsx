@@ -23,6 +23,7 @@ import {
   Zap,
   Shield,
   Target,
+  Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import { parseISO, format as fnsFormat } from "date-fns";
@@ -526,8 +527,18 @@ export default function BacktestPage() {
 
           {/* Results Panel */}
           <Card className="border-zinc-800 bg-zinc-900 lg:col-span-2">
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-zinc-100">Results</CardTitle>
+              {result && (
+                <a
+                  href={api.backtest.exportCsv(result.id)}
+                  download
+                  className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700 transition-colors"
+                >
+                  <Download className="size-3.5" />
+                  Export CSV
+                </a>
+              )}
             </CardHeader>
             <CardContent>
               {!result ? (

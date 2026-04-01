@@ -1,9 +1,12 @@
 """Backtest endpoints – run, list, and inspect backtests."""
 
+import csv
+import io
 import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from data.yahoo_provider import YahooFinanceProvider
@@ -220,3 +223,113 @@ async def list_strategies():
             }
         )
     return strategies
+
+
+@router.post("/compare")
+async def compare_strategies(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    initial_capital: float = 100000,
+    db: Session = Depends(get_db),
+):
+    """Run ALL strategies against the same ticker and compare results."""
+    # 1. Fetch OHLCV data once
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    try:
+        bars = await provider.get_ohlcv(ticker, start, end)
+    except Exception:
+        logger.exception("Market data fetch failed for %s", ticker)
+        raise HTTPException(status_code=500, detail="Failed to fetch market data")
+
+    if not bars:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No OHLCV data found for {ticker} "
+            f"between {start_date} and {end_date}",
+        )
+
+    # 2. Run every registered strategy
+    results = []
+    for strategy_type, strategy_cls in STRATEGY_REGISTRY.items():
+        try:
+            strategy = strategy_cls()
+            config = BacktestConfig(
+                ticker=ticker,
+                strategy=strategy,
+                start_date=start,
+                end_date=end,
+                initial_capital=initial_capital,
+            )
+            result = run_backtest(config, bars)
+
+            sell_pnls = [t.pnl for t in result.trades if t.pnl != 0]
+            gross_profit = sum(p for p in sell_pnls if p > 0)
+            gross_loss = abs(sum(p for p in sell_pnls if p < 0))
+            profit_factor = (
+                gross_profit / gross_loss
+                if gross_loss > 0
+                else (999.0 if gross_profit > 0 else 0)
+            )
+
+            results.append(
+                {
+                    "strategy_name": strategy.name,
+                    "strategy_type": strategy_type,
+                    "winner": False,
+                    "metrics": {
+                        "total_return_pct": result.metrics.total_return_pct,
+                        "sharpe_ratio": result.metrics.sharpe_ratio,
+                        "max_drawdown_pct": result.metrics.max_drawdown_pct,
+                        "win_rate": result.metrics.win_rate,
+                        "total_trades": result.metrics.total_trades,
+                        "profit_factor": profit_factor,
+                        "final_value": result.metrics.final_value,
+                    },
+                }
+            )
+        except Exception:
+            logger.exception("Strategy %s failed during comparison", strategy_type)
+
+    # 3. Sort by total_return_pct descending and mark the winner
+    results.sort(key=lambda r: r["metrics"]["total_return_pct"], reverse=True)
+    if results:
+        results[0]["winner"] = True
+
+    return {
+        "ticker": ticker,
+        "start_date": start_date,
+        "end_date": end_date,
+        "initial_capital": initial_capital,
+        "results": results,
+    }
+
+
+@router.get("/results/{result_id}/export")
+async def export_result(result_id: int, format: str = "csv", db: Session = Depends(get_db)):
+    """Export a backtest result as CSV."""
+    result = (
+        db.query(BacktestResultModel)
+        .filter(BacktestResultModel.id == result_id)
+        .first()
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Backtest result not found")
+
+    if format != "csv":
+        raise HTTPException(status_code=400, detail="Only CSV export is supported")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Date", "Side", "Price", "Quantity", "Value", "PnL"])
+    for t in result.trades:
+        writer.writerow([str(t.date), t.side, t.price, t.quantity, t.value, t.pnl])
+
+    output.seek(0)
+    filename = f"backtest_{result_id}_{result.ticker}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

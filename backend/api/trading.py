@@ -1,11 +1,18 @@
-"""Paper-trading endpoints – orders, positions, portfolio, history."""
+"""Paper-trading endpoints – orders, positions, portfolio, history.
+
+All state is persisted to the database so it survives server restarts.
+"""
 
 import logging
+from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from data.yahoo_provider import YahooFinanceProvider
+from models.database import get_db
 from models.pydantic_models import OrderRequest
+from models.schemas import Portfolio as PortfolioDB, Position as PositionDB, Trade as TradeDB
 from trading.broker import Order, OrderSide, OrderType
 from trading.paper_broker import PaperBroker
 
@@ -13,19 +20,132 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Module-level singleton
-_broker = PaperBroker()
 _provider = YahooFinanceProvider()
+_broker: PaperBroker | None = None
+_broker_loaded = False
 
 
-def _get_broker() -> PaperBroker:
-    """Get the shared paper broker instance."""
+def _get_or_create_portfolio(db: Session) -> PortfolioDB:
+    """Get the default portfolio from DB, creating if needed."""
+    portfolio = db.query(PortfolioDB).filter(PortfolioDB.name == "default").first()
+    if not portfolio:
+        portfolio = PortfolioDB(name="default", cash=100000.0, initial_cash=100000.0)
+        db.add(portfolio)
+        db.commit()
+        db.refresh(portfolio)
+    return portfolio
+
+
+def _load_broker_from_db(db: Session) -> PaperBroker:
+    """Load broker state from database."""
+    global _broker, _broker_loaded
+    if _broker_loaded and _broker is not None:
+        return _broker
+
+    portfolio = _get_or_create_portfolio(db)
+    _broker = PaperBroker(initial_cash=portfolio.initial_cash)
+    _broker.cash = portfolio.cash
+
+    # Load positions
+    positions = db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).all()
+    for pos in positions:
+        if pos.quantity > 0:
+            _broker.positions[pos.ticker] = {
+                "quantity": pos.quantity,
+                "avg_cost": pos.avg_cost,
+            }
+
+    # Load trade history
+    trades = (
+        db.query(TradeDB)
+        .filter(TradeDB.portfolio_id == portfolio.id)
+        .order_by(TradeDB.created_at.asc())
+        .all()
+    )
+    for t in trades:
+        _broker.trades.append({
+            "order_id": str(t.id),
+            "ticker": t.ticker,
+            "side": t.side,
+            "order_type": t.order_type or "market",
+            "price": t.price,
+            "quantity": t.quantity,
+            "value": t.value or (t.price * t.quantity),
+            "timestamp": t.created_at,
+        })
+
+    _broker_loaded = True
+    logger.info(
+        "Loaded portfolio: cash=$%.2f, %d positions, %d trades",
+        _broker.cash,
+        len(_broker.positions),
+        len(_broker.trades),
+    )
+    return _broker
+
+
+def _save_broker_to_db(db: Session):
+    """Persist current broker state to database."""
+    if _broker is None:
+        return
+
+    portfolio = _get_or_create_portfolio(db)
+    portfolio.cash = _broker.cash
+
+    # Sync positions
+    db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).delete()
+    for ticker, pos_data in _broker.positions.items():
+        db_pos = PositionDB(
+            portfolio_id=portfolio.id,
+            ticker=ticker,
+            quantity=pos_data["quantity"],
+            avg_cost=pos_data["avg_cost"],
+            current_price=pos_data.get("last_price", pos_data["avg_cost"]),
+            unrealized_pnl=0,
+        )
+        db.add(db_pos)
+
+    db.commit()
+
+
+def _save_trade_to_db(db: Session, order: Order, result, price: float):
+    """Save a single executed trade to the database."""
+    portfolio = _get_or_create_portfolio(db)
+    trade = TradeDB(
+        portfolio_id=portfolio.id,
+        ticker=order.ticker,
+        side=order.side.value,
+        order_type=order.order_type.value,
+        price=price,
+        quantity=result.filled_quantity,
+        value=price * result.filled_quantity,
+        strategy_name=None,
+        sentiment_score=None,
+        status=result.status.value,
+    )
+    db.add(trade)
+    portfolio.cash = _broker.cash
+    db.commit()
+
+
+def _get_broker(db: Session | None = None) -> PaperBroker:
+    """Get the shared paper broker instance (loading from DB on first call)."""
+    global _broker, _broker_loaded
+    if _broker_loaded and _broker is not None:
+        return _broker
+    if db is not None:
+        return _load_broker_from_db(db)
+    # Fallback: create empty broker (should not normally happen)
+    _broker = PaperBroker()
+    _broker_loaded = True
     return _broker
 
 
 @router.post("/order")
-async def submit_order(req: OrderRequest):
+async def submit_order(req: OrderRequest, db: Session = Depends(get_db)):
     """Submit a paper-trading order."""
+    broker = _load_broker_from_db(db)
+
     try:
         side = OrderSide(req.side.lower())
     except ValueError:
@@ -39,7 +159,6 @@ async def submit_order(req: OrderRequest):
             detail=f"Invalid order_type '{req.order_type}'. Use 'market', 'limit', or 'stop'.",
         )
 
-    # Fetch current price for market orders
     price = req.price
     if order_type == OrderType.MARKET and price is None:
         try:
@@ -50,7 +169,7 @@ async def submit_order(req: OrderRequest):
                     status_code=400,
                     detail=f"Could not get a valid price for {req.ticker}",
                 )
-            await _broker.update_prices({req.ticker: price})
+            await broker.update_prices({req.ticker: price})
         except HTTPException:
             raise
         except Exception as exc:
@@ -66,10 +185,14 @@ async def submit_order(req: OrderRequest):
     )
 
     try:
-        result = await _broker.submit_order(order)
+        result = await broker.submit_order(order)
     except Exception as exc:
         logger.exception("Order execution failed for %s", req.ticker)
         raise HTTPException(status_code=500, detail="Order execution failed")
+
+    # Persist to DB
+    _save_trade_to_db(db, order, result, price or 0)
+    _save_broker_to_db(db)
 
     return {
         "order_id": result.order_id,
@@ -82,10 +205,11 @@ async def submit_order(req: OrderRequest):
 
 
 @router.get("/positions")
-async def get_positions():
+async def get_positions(db: Session = Depends(get_db)):
     """Get all open positions."""
+    broker = _load_broker_from_db(db)
     try:
-        positions = await _broker.get_positions()
+        positions = await broker.get_positions()
         return [
             {
                 "ticker": p.ticker,
@@ -104,10 +228,11 @@ async def get_positions():
 
 
 @router.get("/portfolio")
-async def get_portfolio():
+async def get_portfolio(db: Session = Depends(get_db)):
     """Get portfolio summary."""
+    broker = _load_broker_from_db(db)
     try:
-        portfolio = await _broker.get_portfolio()
+        portfolio = await broker.get_portfolio()
         return {
             "total_value": portfolio.total_value,
             "cash": portfolio.cash,
@@ -134,24 +259,46 @@ async def get_portfolio():
 
 
 @router.get("/history")
-async def get_trade_history():
-    """Get trade history."""
-    try:
-        trades = await _broker.get_trade_history()
-        serialized = []
-        for t in trades:
-            entry = dict(t)
-            if "timestamp" in entry and hasattr(entry["timestamp"], "isoformat"):
-                entry["timestamp"] = entry["timestamp"].isoformat()
-            serialized.append(entry)
-        return serialized
-    except Exception as exc:
-        logger.exception("Failed to fetch trade history")
-        raise HTTPException(status_code=500, detail="Failed to fetch trade history")
+async def get_trade_history(db: Session = Depends(get_db)):
+    """Get trade history from database."""
+    portfolio = _get_or_create_portfolio(db)
+    trades = (
+        db.query(TradeDB)
+        .filter(TradeDB.portfolio_id == portfolio.id)
+        .order_by(TradeDB.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": t.id,
+            "ticker": t.ticker,
+            "side": t.side,
+            "order_type": t.order_type or "market",
+            "price": t.price,
+            "quantity": t.quantity,
+            "value": t.value or (t.price * t.quantity),
+            "status": t.status,
+            "timestamp": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in trades
+    ]
 
 
 @router.post("/reset")
-async def reset_broker():
-    """Reset paper broker to initial state."""
-    _broker.reset()
+async def reset_broker(db: Session = Depends(get_db)):
+    """Reset paper broker to initial state and clear DB."""
+    global _broker, _broker_loaded
+
+    portfolio = _get_or_create_portfolio(db)
+
+    # Clear DB records
+    db.query(TradeDB).filter(TradeDB.portfolio_id == portfolio.id).delete()
+    db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).delete()
+    portfolio.cash = portfolio.initial_cash
+    db.commit()
+
+    # Reset in-memory broker
+    _broker = PaperBroker(initial_cash=portfolio.initial_cash)
+    _broker_loaded = True
+
     return {"detail": "Paper broker reset to initial state"}

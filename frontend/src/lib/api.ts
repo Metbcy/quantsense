@@ -180,6 +180,36 @@ export interface AutoTradeResult {
   };
 }
 
+export interface CompareResult {
+  strategy_name: string;
+  strategy_type: string;
+  winner: boolean;
+  metrics: {
+    total_return_pct: number;
+    sharpe_ratio: number;
+    max_drawdown_pct: number;
+    win_rate: number;
+    total_trades: number;
+    profit_factor: number;
+    final_value: number;
+  };
+}
+
+export interface CompareResponse {
+  ticker: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  results: CompareResult[];
+}
+
+export interface ChartIndicators {
+  sma_20: (number | null)[];
+  rsi: (number | null)[];
+  bollinger_upper: (number | null)[];
+  bollinger_lower: (number | null)[];
+}
+
 export interface AutoTradeAnalysis {
   analyses: {
     ticker: string;
@@ -236,6 +266,9 @@ export const api = {
     strategies: () => fetchJson<StrategyInfo[]>('/backtest/strategies'),
     delete: (id: number) =>
       fetchJson<void>(`/backtest/results/${id}`, { method: 'DELETE' }),
+    compare: (ticker: string, startDate: string, endDate: string, capital?: number) =>
+      fetchJson<CompareResponse>(`/backtest/compare?ticker=${ticker}&start_date=${startDate}&end_date=${endDate}&initial_capital=${capital || 100000}`, { method: 'POST' }),
+    exportCsv: (id: number) => `${API_BASE}/backtest/results/${id}/export?format=csv`,
   },
 
   sentiment: {

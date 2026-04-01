@@ -28,11 +28,14 @@ async def run_auto_trade(
     if not tickers:
         return {"error": "No tickers in watchlist. Add tickers in Settings first."}
 
-    broker = _get_broker()
+    broker = _get_broker(db)
     trader = AutoTrader(broker=broker, buy_threshold=buy_threshold, sell_threshold=sell_threshold)
 
     try:
         result = await trader.run_cycle(tickers)
+        # Persist trades made by auto-trader
+        from api.trading import _save_broker_to_db
+        _save_broker_to_db(db)
         return result
     except Exception as exc:
         logger.exception("Auto-trade cycle failed")
@@ -52,7 +55,7 @@ async def analyze_only(
     if not tickers:
         return {"error": "No tickers in watchlist. Add tickers in Settings first."}
 
-    broker = _get_broker()
+    broker = _get_broker(db)
     trader = AutoTrader(broker=broker, buy_threshold=buy_threshold, sell_threshold=sell_threshold)
 
     analyses = []

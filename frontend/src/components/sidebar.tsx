@@ -10,6 +10,8 @@ import {
   Settings,
   Menu,
   TrendingUp,
+  BarChart3,
+  LineChart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +26,8 @@ import { useState } from "react";
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/backtest", label: "Backtest", icon: FlaskConical },
+  { href: "/compare", label: "Compare", icon: BarChart3 },
+  { href: "/charts", label: "Charts", icon: LineChart },
   { href: "/sentiment", label: "Sentiment", icon: Brain },
   { href: "/auto-trade", label: "AI Trader", icon: Bot },
   { href: "/settings", label: "Settings", icon: Settings },

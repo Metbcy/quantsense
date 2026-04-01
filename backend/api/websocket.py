@@ -9,7 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from data.yahoo_provider import YahooFinanceProvider
 from models.database import SessionLocal
 from models.schemas import Watchlist
-from trading.paper_broker import PaperBroker
+from api.trading import _get_broker, _load_broker_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,6 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 _provider = YahooFinanceProvider()
-_broker = PaperBroker()
 
 
 def _get_watchlist_tickers() -> list[str]:
@@ -61,7 +60,7 @@ def _get_watchlist_tickers() -> list[str]:
 async def _send_portfolio_update(websocket: WebSocket) -> None:
     """Send current portfolio summary over the WebSocket."""
     try:
-        portfolio = await _broker.get_portfolio()
+        portfolio = await _get_broker().get_portfolio()
         await websocket.send_json(
             {
                 "type": "portfolio",
