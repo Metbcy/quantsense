@@ -91,7 +91,7 @@ function computeRSI(
   return result;
 }
 
-type TimeRange = "1M" | "3M" | "6M" | "1Y" | "2Y";
+type TimeRange = "1M" | "3M" | "6M" | "1Y" | "2Y" | "5Y" | "10Y" | "ALL";
 
 function getStartDate(range: TimeRange): Date {
   const now = new Date();
@@ -106,6 +106,12 @@ function getStartDate(range: TimeRange): Date {
       return subYears(now, 1);
     case "2Y":
       return subYears(now, 2);
+    case "5Y":
+      return subYears(now, 5);
+    case "10Y":
+      return subYears(now, 10);
+    case "ALL":
+      return new Date(2000, 0, 1);
   }
 }
 
@@ -282,7 +288,7 @@ export default function ChartsPage() {
   const rsiData = ohlcv ? computeRSI(ohlcv) : [];
   const rsiFiltered = rsiData.filter((d) => d.rsi !== null);
 
-  const timeRanges: TimeRange[] = ["1M", "3M", "6M", "1Y", "2Y"];
+  const timeRanges: TimeRange[] = ["1M", "3M", "6M", "1Y", "2Y", "5Y", "10Y", "ALL"];
 
   return (
     <div className="space-y-6">
