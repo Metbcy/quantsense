@@ -2,6 +2,23 @@ import { toast } from 'sonner';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 
+// ── Auth token management ───────────────────────────────────────────────────
+
+const TOKEN_KEY = 'qs_token';
+
+export function getToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string) {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
 // ── Pagination ───────────────────────────────────────────────────────────────
 
 export interface PaginatedResponse<T> {
@@ -270,6 +287,9 @@ export interface AutoTradeAnalysis {
     sentiment_score?: number;
     rsi?: number | null;
     sma_20?: number | null;
+    macd_histogram?: number | null;
+    weekly_trend?: string;
+    bollinger_squeeze?: boolean;
     signal: string;
     confidence: number;
     reasons: string[];
@@ -297,8 +317,12 @@ async function fetchJson<T>(
     const id = setTimeout(() => controller.abort(), timeout);
 
     try {
+      const authHeaders: Record<string, string> = {};
+      const token = getToken();
+      if (token) authHeaders['Authorization'] = `Bearer ${token}`;
+
       const res = await fetch(`${API_BASE}${path}`, {
-        headers: { 'Content-Type': 'application/json', ...fetchOptions.headers },
+        headers: { 'Content-Type': 'application/json', ...authHeaders, ...fetchOptions.headers },
         signal: controller.signal,
         ...fetchOptions,
       });
@@ -349,8 +373,27 @@ async function fetchJson<T>(
 
 // ── API client ────────────────────────────────────────────────────────────────
 
+export interface AuthUser {
+  id: number;
+  username: string;
+}
+
 export const api = {
   health: () => fetchJson<{ status: string }>('/health'),
+
+  auth: {
+    register: (username: string, password: string) =>
+      fetchJson<{ access_token: string }>('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      }),
+    login: (username: string, password: string) =>
+      fetchJson<{ access_token: string }>('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      }),
+    me: () => fetchJson<AuthUser>('/auth/me', { silent: true }),
+  },
 
   market: {
     search: (q: string) =>

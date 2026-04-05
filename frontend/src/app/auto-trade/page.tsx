@@ -192,6 +192,28 @@ export default function AutoTradePage() {
                         {a.ticker}
                       </span>
                       {signalBadge(a.signal)}
+                      {a.weekly_trend && a.weekly_trend !== "neutral" && (
+                        <Badge
+                          className={
+                            a.weekly_trend === "bullish"
+                              ? "bg-emerald-500/20 text-emerald-400"
+                              : "bg-orange-500/20 text-orange-400"
+                          }
+                        >
+                          {a.weekly_trend === "bullish" ? (
+                            <TrendingUp className="mr-1 size-3" />
+                          ) : (
+                            <TrendingDown className="mr-1 size-3" />
+                          )}
+                          Weekly {a.weekly_trend}
+                        </Badge>
+                      )}
+                      {a.bollinger_squeeze && (
+                        <Badge className="bg-yellow-500/20 text-yellow-400">
+                          <Zap className="mr-1 size-3" />
+                          Squeeze
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-6">
                       {a.price != null && (
@@ -224,6 +246,23 @@ export default function AutoTradePage() {
                           <p className="text-xs text-zinc-500">RSI</p>
                           <p className="font-mono text-zinc-200">
                             {a.rsi?.toFixed(0)}
+                          </p>
+                        </div>
+                      )}
+                      {a.macd_histogram != null && (
+                        <div className="text-right">
+                          <p className="text-xs text-zinc-500">MACD Hist</p>
+                          <p
+                            className={`font-mono ${
+                              a.macd_histogram > 0
+                                ? "text-green-400"
+                                : a.macd_histogram < 0
+                                  ? "text-red-400"
+                                  : "text-zinc-400"
+                            }`}
+                          >
+                            {a.macd_histogram > 0 ? "+" : ""}
+                            {a.macd_histogram?.toFixed(3)}
                           </p>
                         </div>
                       )}
