@@ -280,6 +280,37 @@ export interface ChartIndicators {
   bollinger_lower: (number | null)[];
 }
 
+export interface SchedulerStatus {
+  running: boolean;
+  interval_minutes: number;
+  next_run: string | null;
+  last_run: string | null;
+  total_cycles: number;
+  cycle_history: {
+    cycle: number;
+    timestamp: string;
+    tickers_count?: number;
+    decisions?: number;
+    executions?: number;
+    portfolio_value?: number;
+    status: string;
+  }[];
+}
+
+export interface RebalanceResult {
+  rebalance_actions: string[];
+  before: Record<string, number>;
+  after: Record<string, number>;
+  portfolio: {
+    total_value: number;
+    cash: number;
+    positions_count: number;
+    total_pnl: number;
+    total_pnl_pct: number;
+  };
+  error?: string;
+}
+
 export interface AutoTradeAnalysis {
   analyses: {
     ticker: string;
@@ -474,6 +505,20 @@ export const api = {
   autoTrade: {
     run: () => fetchJson<AutoTradeResult>('/auto-trade/run', { method: 'POST' }),
     analyze: () => fetchJson<AutoTradeAnalysis>('/auto-trade/analyze', { method: 'POST' }),
+    schedulerStart: (intervalMinutes?: number) =>
+      fetchJson<SchedulerStatus>('/auto-trade/scheduler/start', {
+        method: 'POST',
+        body: JSON.stringify({ interval_minutes: intervalMinutes ?? null }),
+      }),
+    schedulerStop: () =>
+      fetchJson<SchedulerStatus>('/auto-trade/scheduler/stop', { method: 'POST' }),
+    schedulerStatus: () =>
+      fetchJson<SchedulerStatus>('/auto-trade/scheduler/status'),
+    rebalance: (thresholdPct?: number) =>
+      fetchJson<RebalanceResult>(
+        `/auto-trade/rebalance${thresholdPct != null ? `?threshold_pct=${thresholdPct}` : ''}`,
+        { method: 'POST' }
+      ),
   },
 };
 

@@ -1,19 +1,57 @@
 """Auto-trading API endpoints."""
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from models.database import get_db
+from config.settings import get_settings
+from models.database import get_db, SessionLocal
 from models.schemas import Watchlist
 from trading.auto_trader import AutoTrader
 from trading.risk_manager import RiskManager, RiskLimits
+from trading.scheduler import get_scheduler_status, start_scheduler, stop_scheduler
 from api.trading import _get_active_broker
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ── Scheduler models ──────────────────────────────────────────────────────────
+
+class SchedulerStartRequest(BaseModel):
+    interval_minutes: Optional[int] = None
+
+
+# ── Scheduler endpoints ───────────────────────────────────────────────────────
+
+@router.post("/scheduler/start")
+async def scheduler_start(body: SchedulerStartRequest = SchedulerStartRequest()):
+    """Start the auto-trade scheduler."""
+    settings = get_settings()
+    interval = body.interval_minutes or settings.AUTO_TRADE_INTERVAL_MINUTES
+    start_scheduler(
+        interval_minutes=interval,
+        broker_factory=_get_active_broker,
+        db_session_factory=SessionLocal,
+    )
+    return get_scheduler_status()
+
+
+@router.post("/scheduler/stop")
+async def scheduler_stop():
+    """Stop the auto-trade scheduler."""
+    stop_scheduler()
+    return get_scheduler_status()
+
+
+@router.get("/scheduler/status")
+async def scheduler_status():
+    """Get auto-trade scheduler status."""
+    return get_scheduler_status()
 
 
 @router.post("/run")
@@ -54,6 +92,26 @@ async def run_auto_trade(
     except Exception as exc:
         logger.exception("Auto-trade cycle failed")
         return {"error": f"Auto-trade cycle failed: {str(exc)}"}
+
+
+@router.post("/rebalance")
+async def rebalance_portfolio(
+    threshold_pct: float = 0.05,
+    db: Session = Depends(get_db),
+):
+    """Rebalance portfolio to equal-weight across all held positions."""
+    broker = _get_active_broker(db)
+    risk_manager = RiskManager(RiskLimits())
+    trader = AutoTrader(broker=broker, risk_manager=risk_manager)
+
+    try:
+        result = await trader.rebalance(threshold_pct=threshold_pct)
+        from api.trading import _save_broker_to_db
+        _save_broker_to_db(db)
+        return result
+    except Exception as exc:
+        logger.exception("Rebalance failed")
+        return {"error": f"Rebalance failed: {str(exc)}"}
 
 
 @router.post("/analyze")

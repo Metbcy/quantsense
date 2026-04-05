@@ -433,6 +433,163 @@ class AutoTrader:
 
         return results
 
+    async def rebalance(self, threshold_pct: float = 0.05) -> dict:
+        """Rebalance portfolio to equal-weight across all held positions.
+
+        Positions deviating from target weight by more than *threshold_pct*
+        are trimmed or topped-up.  Orders below $100 notional are skipped.
+        """
+        portfolio = await self.broker.get_portfolio()
+        positions = portfolio.positions
+
+        result: dict = {
+            "rebalance_actions": [],
+            "before": {},
+            "after": {},
+            "portfolio": {
+                "total_value": portfolio.total_value,
+                "cash": portfolio.cash,
+                "positions_count": len(positions),
+                "total_pnl": portfolio.total_pnl,
+                "total_pnl_pct": portfolio.total_pnl_pct,
+            },
+        }
+
+        if len(positions) == 0:
+            result["rebalance_actions"].append("No positions to rebalance")
+            return result
+
+        if portfolio.total_value <= 0:
+            result["rebalance_actions"].append("Portfolio has no value")
+            return result
+
+        target_weight = 1.0 / len(positions)
+
+        # Record current weights
+        for pos in positions:
+            result["before"][pos.ticker] = round(
+                pos.market_value / portfolio.total_value, 4
+            )
+
+        # Determine needed adjustments — sells first so we free cash for buys
+        sells: list[tuple[str, float, float, float]] = []  # ticker, delta$, price, qty_to_sell
+        buys: list[tuple[str, float, float, float]] = []   # ticker, delta$, price, qty_to_buy
+
+        for pos in positions:
+            current_weight = pos.market_value / portfolio.total_value
+            deviation = current_weight - target_weight
+
+            if pos.current_price <= 0:
+                continue
+
+            target_value = portfolio.total_value * target_weight
+            delta_value = abs(pos.market_value - target_value)
+
+            # Skip small adjustments
+            if delta_value < 100:
+                continue
+
+            if deviation > threshold_pct:
+                # Overweight — sell to trim
+                sell_value = pos.market_value - target_value
+                qty = int(sell_value / pos.current_price)
+                if qty > 0:
+                    sells.append((pos.ticker, sell_value, pos.current_price, qty))
+            elif deviation < -threshold_pct:
+                # Underweight — buy to top up
+                buy_value = target_value - pos.market_value
+                qty = int(buy_value / pos.current_price)
+                if qty > 0:
+                    buys.append((pos.ticker, buy_value, pos.current_price, qty))
+
+        # Execute sells first to free cash
+        for ticker, _delta, price, qty in sells:
+            order = Order(
+                ticker=ticker,
+                side=OrderSide.SELL,
+                order_type=OrderType.MARKET,
+                quantity=qty,
+                price=price,
+            )
+            allowed, reason = self.risk_manager.check_order(order, portfolio)
+            if not allowed:
+                result["rebalance_actions"].append(
+                    f"SKIP SELL {ticker}: {reason}"
+                )
+                continue
+
+            try:
+                res = await self.broker.submit_order(order)
+                result["rebalance_actions"].append(
+                    f"SELL {qty} {ticker} @ ${price:.2f} — {res.status.value}"
+                )
+                # Refresh portfolio after each trade for accurate cash
+                portfolio = await self.broker.get_portfolio()
+            except Exception as e:
+                result["rebalance_actions"].append(
+                    f"ERROR SELL {ticker}: {e}"
+                )
+
+        # Execute buys with available cash
+        for ticker, _delta, price, qty in buys:
+            cost = price * qty
+            if cost > portfolio.cash:
+                qty = int(portfolio.cash / price)
+            if qty <= 0:
+                result["rebalance_actions"].append(
+                    f"SKIP BUY {ticker}: insufficient cash"
+                )
+                continue
+
+            order = Order(
+                ticker=ticker,
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                quantity=qty,
+                price=price,
+            )
+            allowed, reason = self.risk_manager.check_order(order, portfolio)
+            if not allowed:
+                result["rebalance_actions"].append(
+                    f"SKIP BUY {ticker}: {reason}"
+                )
+                continue
+
+            try:
+                res = await self.broker.submit_order(order)
+                result["rebalance_actions"].append(
+                    f"BUY {qty} {ticker} @ ${price:.2f} — {res.status.value}"
+                )
+                portfolio = await self.broker.get_portfolio()
+            except Exception as e:
+                result["rebalance_actions"].append(
+                    f"ERROR BUY {ticker}: {e}"
+                )
+
+        # Record weights after rebalancing
+        portfolio = await self.broker.get_portfolio()
+        for pos in portfolio.positions:
+            if portfolio.total_value > 0:
+                result["after"][pos.ticker] = round(
+                    pos.market_value / portfolio.total_value, 4
+                )
+
+        result["portfolio"] = {
+            "total_value": portfolio.total_value,
+            "cash": portfolio.cash,
+            "positions_count": len(portfolio.positions),
+            "total_pnl": portfolio.total_pnl,
+            "total_pnl_pct": portfolio.total_pnl_pct,
+        }
+
+        if not sells and not buys:
+            result["rebalance_actions"].append(
+                "Portfolio already balanced within threshold"
+            )
+
+        logger.info("Rebalance complete: %d actions", len(result["rebalance_actions"]))
+        return result
+
     async def run_cycle(self, tickers: list[str]) -> dict:
         """Run one full analysis + trade cycle."""
         # Reset daily risk tracking on a new trading day

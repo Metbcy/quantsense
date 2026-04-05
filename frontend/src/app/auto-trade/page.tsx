@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Bot,
   Loader2,
@@ -12,6 +12,10 @@ import {
   Zap,
   ShieldCheck,
   AlertTriangle,
+  Clock,
+  Square,
+  Timer,
+  Scale,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -29,6 +33,8 @@ import { api } from "@/lib/api";
 import type {
   AutoTradeResult,
   AutoTradeAnalysis,
+  SchedulerStatus,
+  RebalanceResult,
 } from "@/lib/api";
 
 function signalBadge(signal: string) {
@@ -78,6 +84,29 @@ export default function AutoTradePage() {
   const [executing, setExecuting] = useState(false);
   const [analysis, setAnalysis] = useState<AutoTradeAnalysis | null>(null);
   const [result, setResult] = useState<AutoTradeResult | null>(null);
+  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
+  const [schedulerLoading, setSchedulerLoading] = useState(false);
+  const [selectedInterval, setSelectedInterval] = useState(30);
+  const [rebalancing, setRebalancing] = useState(false);
+  const [rebalanceResult, setRebalanceResult] = useState<RebalanceResult | null>(null);
+
+  const fetchSchedulerStatus = useCallback(async () => {
+    try {
+      const status = await api.autoTrade.schedulerStatus();
+      setSchedulerStatus(status);
+      if (status.interval_minutes) {
+        setSelectedInterval(status.interval_minutes);
+      }
+    } catch {
+      // Silently fail on status poll
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSchedulerStatus();
+    const interval = setInterval(fetchSchedulerStatus, 15000);
+    return () => clearInterval(interval);
+  }, [fetchSchedulerStatus]);
 
   async function handleAnalyze() {
     setAnalyzing(true);
@@ -104,6 +133,42 @@ export default function AutoTradePage() {
       toast.error(err instanceof Error ? err.message : "Auto-trade failed");
     } finally {
       setExecuting(false);
+    }
+  }
+
+  async function handleSchedulerToggle() {
+    setSchedulerLoading(true);
+    try {
+      if (schedulerStatus?.running) {
+        const status = await api.autoTrade.schedulerStop();
+        setSchedulerStatus(status);
+        toast.success("Scheduled trading stopped");
+      } else {
+        const status = await api.autoTrade.schedulerStart(selectedInterval);
+        setSchedulerStatus(status);
+        toast.success(`Scheduled trading started (every ${selectedInterval}m)`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Scheduler action failed");
+    } finally {
+      setSchedulerLoading(false);
+    }
+  }
+
+  async function handleRebalance() {
+    setRebalancing(true);
+    try {
+      const res = await api.autoTrade.rebalance();
+      setRebalanceResult(res);
+      if (res.error) {
+        toast.error(res.error);
+      } else {
+        toast.success("Portfolio rebalanced");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Rebalance failed");
+    } finally {
+      setRebalancing(false);
     }
   }
 
@@ -170,7 +235,227 @@ export default function AutoTradePage() {
         </CardContent>
       </Card>
 
-      {/* Analysis Results */}
+      {/* Scheduled Trading */}
+      <Card className="border-zinc-800 bg-zinc-900">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-zinc-100">
+            <Clock className="size-5 text-purple-400" />
+            Scheduled Trading
+          </CardTitle>
+          <CardDescription className="text-zinc-500">
+            Automatically run trading cycles at regular intervals during US
+            market hours (9:30 AM – 4:00 PM Eastern, weekdays).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-zinc-400">Interval:</label>
+              <select
+                value={selectedInterval}
+                onChange={(e) => setSelectedInterval(Number(e.target.value))}
+                disabled={schedulerStatus?.running || schedulerLoading}
+                className="rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-200 focus:border-purple-500 focus:outline-none disabled:opacity-50"
+              >
+                <option value={15}>15 minutes</option>
+                <option value={30}>30 minutes</option>
+                <option value={60}>60 minutes</option>
+              </select>
+            </div>
+
+            <Button
+              onClick={handleSchedulerToggle}
+              disabled={schedulerLoading}
+              className={
+                schedulerStatus?.running
+                  ? "bg-red-600 text-white hover:bg-red-700"
+                  : "bg-purple-600 text-white hover:bg-purple-700"
+              }
+            >
+              {schedulerLoading ? (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              ) : schedulerStatus?.running ? (
+                <Square className="mr-2 size-4" />
+              ) : (
+                <Play className="mr-2 size-4" />
+              )}
+              {schedulerStatus?.running ? "Stop Scheduler" : "Start Scheduler"}
+            </Button>
+          </div>
+
+          {/* Status display */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+              <p className="text-xs text-zinc-500">Status</p>
+              <div className="mt-1 flex items-center gap-2">
+                <span
+                  className={`size-2 rounded-full ${
+                    schedulerStatus?.running ? "bg-green-500 animate-pulse" : "bg-zinc-600"
+                  }`}
+                />
+                <span className="text-sm font-medium text-zinc-200">
+                  {schedulerStatus?.running ? "Running" : "Stopped"}
+                </span>
+              </div>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+              <p className="text-xs text-zinc-500">Interval</p>
+              <p className="mt-1 text-sm font-medium text-zinc-200">
+                {schedulerStatus?.interval_minutes ?? selectedInterval}m
+              </p>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+              <p className="text-xs text-zinc-500">Next Run</p>
+              <p className="mt-1 text-sm font-medium text-zinc-200">
+                {schedulerStatus?.next_run
+                  ? new Date(schedulerStatus.next_run).toLocaleTimeString()
+                  : "—"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+              <p className="text-xs text-zinc-500">Cycles Completed</p>
+              <p className="mt-1 text-sm font-medium text-zinc-200">
+                {schedulerStatus?.total_cycles ?? 0}
+              </p>
+            </div>
+          </div>
+
+          {/* Last run */}
+          {schedulerStatus?.last_run && (
+            <p className="text-xs text-zinc-500">
+              <Timer className="mr-1 inline size-3" />
+              Last run: {new Date(schedulerStatus.last_run).toLocaleString()}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Portfolio Rebalancing */}
+      <Card className="border-zinc-800 bg-zinc-900">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-zinc-100">
+            <Scale className="size-5 text-cyan-400" />
+            Portfolio Rebalancing
+          </CardTitle>
+          <CardDescription className="text-zinc-500">
+            Equal-weight rebalance across all held positions. Positions
+            deviating more than 5% from target are adjusted.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Button
+            onClick={handleRebalance}
+            disabled={rebalancing || executing}
+            className="bg-cyan-600 text-white hover:bg-cyan-700"
+          >
+            {rebalancing ? (
+              <Loader2 className="mr-2 size-4 animate-spin" />
+            ) : (
+              <Scale className="mr-2 size-4" />
+            )}
+            Rebalance Portfolio
+          </Button>
+
+          {rebalanceResult && !rebalanceResult.error && (
+            <div className="space-y-4">
+              {/* Weight comparison table */}
+              {Object.keys(rebalanceResult.before).length > 0 && (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                  <p className="mb-3 text-sm font-medium text-zinc-300">
+                    Position Weights
+                  </p>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-4 gap-2 text-xs font-medium text-zinc-500">
+                      <span>Ticker</span>
+                      <span className="text-right">Before</span>
+                      <span className="text-right">After</span>
+                      <span className="text-right">Target</span>
+                    </div>
+                    {Object.keys(rebalanceResult.before).map((ticker) => {
+                      const before = rebalanceResult.before[ticker] ?? 0;
+                      const after = rebalanceResult.after[ticker] ?? 0;
+                      const target =
+                        Object.keys(rebalanceResult.before).length > 0
+                          ? 1 / Object.keys(rebalanceResult.before).length
+                          : 0;
+                      return (
+                        <div
+                          key={ticker}
+                          className="grid grid-cols-4 gap-2 text-sm"
+                        >
+                          <span className="font-mono text-blue-400">
+                            {ticker}
+                          </span>
+                          <span className="text-right text-zinc-400">
+                            {(before * 100).toFixed(1)}%
+                          </span>
+                          <span className="text-right text-zinc-200">
+                            {(after * 100).toFixed(1)}%
+                          </span>
+                          <span className="text-right text-zinc-500">
+                            {(target * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                <p className="mb-2 text-sm font-medium text-zinc-300">
+                  Rebalance Actions
+                </p>
+                <div className="space-y-1">
+                  {rebalanceResult.rebalance_actions.map((action, i) => (
+                    <p key={i} className="text-xs text-zinc-400">
+                      {action.startsWith("SELL") ? (
+                        <TrendingDown className="mr-1 inline size-3 text-red-400" />
+                      ) : action.startsWith("BUY") ? (
+                        <TrendingUp className="mr-1 inline size-3 text-green-400" />
+                      ) : (
+                        <Minus className="mr-1 inline size-3 text-zinc-500" />
+                      )}
+                      {action}
+                    </p>
+                  ))}
+                </div>
+              </div>
+
+              {/* Portfolio summary */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <p className="text-xs text-zinc-500">Portfolio Value</p>
+                  <p className="text-sm font-bold text-zinc-100">
+                    $
+                    {rebalanceResult.portfolio.total_value.toLocaleString(
+                      undefined,
+                      { maximumFractionDigits: 0 }
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <p className="text-xs text-zinc-500">Cash</p>
+                  <p className="text-sm font-bold text-zinc-100">
+                    $
+                    {rebalanceResult.portfolio.cash.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <p className="text-xs text-zinc-500">Positions</p>
+                  <p className="text-sm font-bold text-zinc-100">
+                    {rebalanceResult.portfolio.positions_count}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {analysis && (
         <Card className="border-zinc-800 bg-zinc-900">
           <CardHeader>
