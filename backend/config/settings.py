@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     PAPER_TRADING_INITIAL_CASH: float = 100000.0
     SENTIMENT_REFRESH_MINUTES: int = 30
 
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3030"
+    RATE_LIMIT: str = "60/minute"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     @property

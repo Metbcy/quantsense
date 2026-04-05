@@ -13,7 +13,7 @@ from data.yahoo_provider import YahooFinanceProvider
 from models.database import get_db
 from models.pydantic_models import OrderRequest
 from models.schemas import Portfolio as PortfolioDB, Position as PositionDB, Trade as TradeDB
-from trading.broker import Broker, Order, OrderSide, OrderType
+from trading.broker import Broker, Order, OrderSide, OrderStatus, OrderType
 from trading.paper_broker import PaperBroker
 from trading.alpaca_broker import AlpacaBroker
 from config.settings import settings
@@ -66,7 +66,7 @@ def _load_broker_from_db(db: Session) -> PaperBroker:
     _paper_broker = PaperBroker(initial_cash=portfolio.initial_cash)
     _paper_broker.cash = portfolio.cash
 
-    # Load positions
+    # Load positions and restore current prices
     positions = db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).all()
     for pos in positions:
         if pos.quantity > 0:
@@ -74,6 +74,8 @@ def _load_broker_from_db(db: Session) -> PaperBroker:
                 "quantity": pos.quantity,
                 "avg_cost": pos.avg_cost,
             }
+            if pos.current_price and pos.current_price > 0:
+                _paper_broker._current_prices[pos.ticker] = pos.current_price
 
     # Load trade history
     trades = (
@@ -115,13 +117,17 @@ def _save_broker_to_db(db: Session):
     # Sync positions
     db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).delete()
     for ticker, pos_data in _paper_broker.positions.items():
+        current_price = _paper_broker._current_prices.get(ticker, pos_data["avg_cost"])
+        quantity = pos_data["quantity"]
+        avg_cost = pos_data["avg_cost"]
+        unrealized_pnl = (current_price - avg_cost) * quantity
         db_pos = PositionDB(
             portfolio_id=portfolio.id,
             ticker=ticker,
-            quantity=pos_data["quantity"],
-            avg_cost=pos_data["avg_cost"],
-            current_price=pos_data.get("last_price", pos_data["avg_cost"]),
-            unrealized_pnl=0,
+            quantity=quantity,
+            avg_cost=avg_cost,
+            current_price=current_price,
+            unrealized_pnl=unrealized_pnl,
         )
         db.add(db_pos)
 
@@ -203,9 +209,10 @@ async def submit_order(req: OrderRequest, db: Session = Depends(get_db)):
         logger.exception("Order execution failed for %s", req.ticker)
         raise HTTPException(status_code=500, detail="Order execution failed")
 
-    # Persist only if it's the paper broker
+    # Persist only if it's the paper broker and the order was filled
     if isinstance(broker, PaperBroker):
-        _save_trade_to_db(db, order, result, price or 0)
+        if result.status == OrderStatus.FILLED:
+            _save_trade_to_db(db, order, result, result.filled_price)
         _save_broker_to_db(db)
 
     return {
@@ -273,34 +280,49 @@ async def get_portfolio(db: Session = Depends(get_db)):
 
 
 @router.get("/history")
-async def get_trade_history(db: Session = Depends(get_db)):
-    """Get trade history."""
+async def get_trade_history(
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+):
+    """Get trade history (paginated)."""
     broker = _get_active_broker(db)
-    
+
     if isinstance(broker, AlpacaBroker):
         return await broker.get_trade_history()
-        
+
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    offset = (page - 1) * page_size
+
     portfolio = _get_or_create_portfolio(db)
-    trades = (
+    query = (
         db.query(TradeDB)
         .filter(TradeDB.portfolio_id == portfolio.id)
         .order_by(TradeDB.created_at.desc())
-        .all()
     )
-    return [
-        {
-            "id": t.id,
-            "ticker": t.ticker,
-            "side": t.side,
-            "order_type": t.order_type or "market",
-            "price": t.price,
-            "quantity": t.quantity,
-            "value": t.value or (t.price * t.quantity),
-            "status": t.status,
-            "timestamp": t.created_at.isoformat() if t.created_at else None,
-        }
-        for t in trades
-    ]
+    total = query.count()
+    trades = query.offset(offset).limit(page_size).all()
+
+    return {
+        "items": [
+            {
+                "id": t.id,
+                "ticker": t.ticker,
+                "side": t.side,
+                "order_type": t.order_type or "market",
+                "price": t.price,
+                "quantity": t.quantity,
+                "value": t.value or (t.price * t.quantity),
+                "status": t.status,
+                "timestamp": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t in trades
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.post("/reset")

@@ -241,7 +241,7 @@ export default function BacktestPage() {
     data: previousResults,
     loading: historyLoading,
     refetch: refetchHistory,
-  } = useFetch<BacktestResult[]>(() => api.backtest.list(), []);
+  } = useFetch(() => api.backtest.list().then((r) => r.items), []);
 
   const dates = useMemo(defaultDates, []);
 

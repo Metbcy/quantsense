@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopSidebar, MobileSidebar } from "@/components/sidebar";
+import { ErrorBoundary } from "@/components/error-boundary";
 import "./globals.css";
 
 const inter = Inter({
@@ -42,7 +43,9 @@ export default function RootLayout({
             </span>
           </header>
 
-          <main className="flex-1 p-4 md:p-6">{children}</main>
+          <main className="flex-1 p-4 md:p-6">
+            <ErrorBoundary>{children}</ErrorBoundary>
+          </main>
         </div>
 
         <Toaster position="bottom-right" />

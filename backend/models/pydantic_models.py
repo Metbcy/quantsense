@@ -89,7 +89,13 @@ class StrategyResponse(BaseModel):
 
 class BacktestRequest(BaseModel):
     ticker: str
-...
+    strategy_type: str
+    start_date: date
+    end_date: date
+    params: Optional[dict] = None
+    initial_capital: float = 100000.0
+    stop_loss_pct: Optional[float] = Field(None, ge=0, le=1.0)
+    take_profit_pct: Optional[float] = Field(None, ge=0, le=10.0)
     atr_stop_multiplier: Optional[float] = Field(None, ge=0, le=10.0)
 
 

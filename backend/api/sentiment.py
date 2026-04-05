@@ -111,24 +111,34 @@ async def sentiment_feed(
 
 
 @router.get("/history/{ticker}")
-async def sentiment_history(ticker: str, db: Session = Depends(get_db)):
-    """Get historical sentiment data for a specific ticker."""
-    records = (
+async def sentiment_history(
+    ticker: str,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+):
+    """Get historical sentiment data for a specific ticker (paginated)."""
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    offset = (page - 1) * page_size
+
+    query = (
         db.query(SentimentRecord)
         .filter(SentimentRecord.ticker == ticker.upper())
         .order_by(SentimentRecord.created_at.desc())
-        .all()
     )
-    aggregate = (
-        db.query(SentimentAggregate)
-        .filter(SentimentAggregate.ticker == ticker.upper())
-        .first()
-    )
+    total = query.count()
+    records = query.offset(offset).limit(page_size).all()
 
-    return [
-        {
-            "date": r.created_at.isoformat() if r.created_at else None,
-            "score": r.vader_score,
-        }
-        for r in records
-    ]
+    return {
+        "items": [
+            {
+                "date": r.created_at.isoformat() if r.created_at else None,
+                "score": r.vader_score,
+            }
+            for r in records
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }

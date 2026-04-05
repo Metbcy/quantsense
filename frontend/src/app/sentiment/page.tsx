@@ -91,8 +91,8 @@ export default function SentimentPage() {
   const {
     data: historyData,
     loading: historyLoading,
-  } = useFetch<{ date: string; score: number }[]>(
-    () => (historyTicker ? api.sentiment.history(historyTicker) : Promise.resolve([])),
+  } = useFetch(
+    () => (historyTicker ? api.sentiment.history(historyTicker).then((r) => r.items) : Promise.resolve([])),
     [historyTicker]
   );
 

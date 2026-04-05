@@ -2,6 +2,15 @@ import { toast } from 'sonner';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 
+// ── Pagination ───────────────────────────────────────────────────────────────
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 // ── Type definitions ──────────────────────────────────────────────────────────
 
 export interface Quote {
@@ -366,7 +375,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    list: () => fetchJson<BacktestResult[]>('/backtest/results'),
+    list: (page = 1, pageSize = 20) =>
+      fetchJson<PaginatedResponse<BacktestResult>>(`/backtest/results?page=${page}&page_size=${pageSize}`),
     get: (id: number) => fetchJson<BacktestResult>(`/backtest/results/${id}`),
     strategies: () => fetchJson<StrategyInfo[]>('/backtest/strategies'),
     delete: (id: number) =>
@@ -380,9 +390,9 @@ export const api = {
     analyze: (ticker: string) =>
       fetchJson<SentimentResult>(`/sentiment/analyze/${encodeURIComponent(ticker)}`),
     feed: () => fetchJson<SentimentResult[]>('/sentiment/feed'),
-    history: (ticker: string) =>
-      fetchJson<{ date: string; score: number }[]>(
-        `/sentiment/history/${encodeURIComponent(ticker)}`
+    history: (ticker: string, page = 1, pageSize = 50) =>
+      fetchJson<PaginatedResponse<{ date: string; score: number }>>(
+        `/sentiment/history/${encodeURIComponent(ticker)}?page=${page}&page_size=${pageSize}`
       ),
   },
 
@@ -394,7 +404,8 @@ export const api = {
       }),
     positions: () => fetchJson<Position[]>('/trading/positions'),
     portfolio: () => fetchJson<Portfolio>('/trading/portfolio'),
-    history: () => fetchJson<TradeRecord[]>('/trading/history'),
+    history: (page = 1, pageSize = 50) =>
+      fetchJson<PaginatedResponse<TradeRecord>>(`/trading/history?page=${page}&page_size=${pageSize}`),
     reset: () => fetchJson<void>('/trading/reset', { method: 'POST' }),
   },
 

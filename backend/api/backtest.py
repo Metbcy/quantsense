@@ -221,10 +221,22 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None, metric
 
 
 @router.get("/results")
-async def list_results(db: Session = Depends(get_db)):
-    """List all saved backtest results."""
-    results = db.query(BacktestResultModel).order_by(BacktestResultModel.created_at.desc()).all()
-    return [_format_result(r) for r in results]
+async def list_results(page: int = 1, page_size: int = 20, db: Session = Depends(get_db)):
+    """List all saved backtest results (paginated)."""
+    page = max(1, page)
+    page_size = min(max(1, page_size), 100)
+    offset = (page - 1) * page_size
+
+    query = db.query(BacktestResultModel).order_by(BacktestResultModel.created_at.desc())
+    total = query.count()
+    results = query.offset(offset).limit(page_size).all()
+
+    return {
+        "items": [_format_result(r) for r in results],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @router.get("/results/{result_id}")

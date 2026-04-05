@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from models.database import get_db
 from models.schemas import Watchlist
 from trading.auto_trader import AutoTrader
-from api.trading import _get_broker
+from api.trading import _get_active_broker
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ async def run_auto_trade(
     if not tickers:
         return {"error": "No tickers in watchlist. Add tickers in Settings first."}
 
-    broker = _get_broker(db)
+    broker = _get_active_broker(db)
     trader = AutoTrader(broker=broker, buy_threshold=buy_threshold, sell_threshold=sell_threshold)
 
     try:
@@ -55,7 +55,7 @@ async def analyze_only(
     if not tickers:
         return {"error": "No tickers in watchlist. Add tickers in Settings first."}
 
-    broker = _get_broker(db)
+    broker = _get_active_broker(db)
     trader = AutoTrader(broker=broker, buy_threshold=buy_threshold, sell_threshold=sell_threshold)
 
     analyses = []
