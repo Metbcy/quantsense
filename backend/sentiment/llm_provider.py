@@ -169,43 +169,57 @@ class OpenAIProvider(LLMProvider):
             return _fallback_result(str(exc))
 
 
-class AnthropicProvider(LLMProvider):
-    """Anthropic Claude 3 Haiku provider."""
-
-    def __init__(self) -> None:
-        from config.settings import get_settings
-
-        self._api_key = get_settings().anthropic_api_key or os.getenv(
-            "ANTHROPIC_API_KEY", ""
-        )
+class CopilotProvider(LLMProvider):
+    """GitHub Copilot provider (via device-flow auth)."""
 
     @property
     def name(self) -> str:
-        return "anthropic"
+        return "copilot"
 
     def is_available(self) -> bool:
-        return bool(self._api_key)
+        try:
+            from sentiment.ghcp_auth import get_token
+
+            get_token()
+            return True
+        except Exception:
+            return False
 
     async def analyze(self, text: str, ticker: str) -> LLMSentimentResult:
-        if not self.is_available():
-            return _fallback_result("ANTHROPIC_API_KEY not configured")
         try:
-            import anthropic
+            from sentiment.ghcp_auth import get_token, COPILOT_ENDPOINT, DEFAULT_HEADERS
+            import httpx
 
-            client = anthropic.AsyncAnthropic(api_key=self._api_key)
-            response = await client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=1024,
-                system="You are a financial sentiment analyst. Respond with valid JSON only.",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": ANALYSIS_PROMPT.format(ticker=ticker, text=text),
+            token = get_token()
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{COPILOT_ENDPOINT}/chat/completions",
+                    headers={
+                        **DEFAULT_HEADERS,
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
                     },
-                ],
-            )
-            raw = response.content[0].text if response.content else ""
-            return _result_from_dict(_parse_llm_json(raw))
+                    json={
+                        "model": "claude-opus-4-6",
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "You are a financial sentiment analyst. Respond with valid JSON only.",
+                            },
+                            {
+                                "role": "user",
+                                "content": ANALYSIS_PROMPT.format(
+                                    ticker=ticker, text=text
+                                ),
+                            },
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": 1024,
+                    },
+                )
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"]
+                return _result_from_dict(_parse_llm_json(raw))
         except Exception as exc:
-            logger.warning("AnthropicProvider error: %s", exc)
+            logger.warning("CopilotProvider error: %s", exc)
             return _fallback_result(str(exc))

@@ -13,16 +13,36 @@ from data.yahoo_provider import YahooFinanceProvider
 from models.database import get_db
 from models.pydantic_models import OrderRequest
 from models.schemas import Portfolio as PortfolioDB, Position as PositionDB, Trade as TradeDB
-from trading.broker import Order, OrderSide, OrderType
+from trading.broker import Broker, Order, OrderSide, OrderType
 from trading.paper_broker import PaperBroker
+from trading.alpaca_broker import AlpacaBroker
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 _provider = YahooFinanceProvider()
-_broker: PaperBroker | None = None
-_broker_loaded = False
+_paper_broker: PaperBroker | None = None
+_alpaca_broker: AlpacaBroker | None = None
+_paper_broker_loaded = False
+
+
+def _get_active_broker(db: Session) -> Broker:
+    """Returns AlpacaBroker if configured, otherwise PaperBroker."""
+    global _alpaca_broker, _paper_broker, _paper_broker_loaded
+    
+    if settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
+        if _alpaca_broker is None:
+            _alpaca_broker = AlpacaBroker()
+        if _alpaca_broker.is_available:
+            return _alpaca_broker
+
+    if not _paper_broker_loaded:
+        _paper_broker = _load_broker_from_db(db)
+        _paper_broker_loaded = True
+    
+    return _paper_broker
 
 
 def _get_or_create_portfolio(db: Session) -> PortfolioDB:
@@ -38,19 +58,19 @@ def _get_or_create_portfolio(db: Session) -> PortfolioDB:
 
 def _load_broker_from_db(db: Session) -> PaperBroker:
     """Load broker state from database."""
-    global _broker, _broker_loaded
-    if _broker_loaded and _broker is not None:
-        return _broker
+    global _paper_broker, _paper_broker_loaded
+    if _paper_broker_loaded and _paper_broker is not None:
+        return _paper_broker
 
     portfolio = _get_or_create_portfolio(db)
-    _broker = PaperBroker(initial_cash=portfolio.initial_cash)
-    _broker.cash = portfolio.cash
+    _paper_broker = PaperBroker(initial_cash=portfolio.initial_cash)
+    _paper_broker.cash = portfolio.cash
 
     # Load positions
     positions = db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).all()
     for pos in positions:
         if pos.quantity > 0:
-            _broker.positions[pos.ticker] = {
+            _paper_broker.positions[pos.ticker] = {
                 "quantity": pos.quantity,
                 "avg_cost": pos.avg_cost,
             }
@@ -63,7 +83,7 @@ def _load_broker_from_db(db: Session) -> PaperBroker:
         .all()
     )
     for t in trades:
-        _broker.trades.append({
+        _paper_broker.trades.append({
             "order_id": str(t.id),
             "ticker": t.ticker,
             "side": t.side,
@@ -74,27 +94,27 @@ def _load_broker_from_db(db: Session) -> PaperBroker:
             "timestamp": t.created_at,
         })
 
-    _broker_loaded = True
+    _paper_broker_loaded = True
     logger.info(
         "Loaded portfolio: cash=$%.2f, %d positions, %d trades",
-        _broker.cash,
-        len(_broker.positions),
-        len(_broker.trades),
+        _paper_broker.cash,
+        len(_paper_broker.positions),
+        len(_paper_broker.trades),
     )
-    return _broker
+    return _paper_broker
 
 
 def _save_broker_to_db(db: Session):
     """Persist current broker state to database."""
-    if _broker is None:
+    if _paper_broker is None:
         return
 
     portfolio = _get_or_create_portfolio(db)
-    portfolio.cash = _broker.cash
+    portfolio.cash = _paper_broker.cash
 
     # Sync positions
     db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).delete()
-    for ticker, pos_data in _broker.positions.items():
+    for ticker, pos_data in _paper_broker.positions.items():
         db_pos = PositionDB(
             portfolio_id=portfolio.id,
             ticker=ticker,
@@ -110,6 +130,9 @@ def _save_broker_to_db(db: Session):
 
 def _save_trade_to_db(db: Session, order: Order, result, price: float):
     """Save a single executed trade to the database."""
+    if _paper_broker is None:
+        return
+        
     portfolio = _get_or_create_portfolio(db)
     trade = TradeDB(
         portfolio_id=portfolio.id,
@@ -124,27 +147,14 @@ def _save_trade_to_db(db: Session, order: Order, result, price: float):
         status=result.status.value,
     )
     db.add(trade)
-    portfolio.cash = _broker.cash
+    portfolio.cash = _paper_broker.cash
     db.commit()
-
-
-def _get_broker(db: Session | None = None) -> PaperBroker:
-    """Get the shared paper broker instance (loading from DB on first call)."""
-    global _broker, _broker_loaded
-    if _broker_loaded and _broker is not None:
-        return _broker
-    if db is not None:
-        return _load_broker_from_db(db)
-    # Fallback: create empty broker (should not normally happen)
-    _broker = PaperBroker()
-    _broker_loaded = True
-    return _broker
 
 
 @router.post("/order")
 async def submit_order(req: OrderRequest, db: Session = Depends(get_db)):
-    """Submit a paper-trading order."""
-    broker = _load_broker_from_db(db)
+    """Submit a paper-trading or live order."""
+    broker = _get_active_broker(db)
 
     try:
         side = OrderSide(req.side.lower())
@@ -169,7 +179,10 @@ async def submit_order(req: OrderRequest, db: Session = Depends(get_db)):
                     status_code=400,
                     detail=f"Could not get a valid price for {req.ticker}",
                 )
-            await broker.update_prices({req.ticker: price})
+            
+            # If paper broker, we manually update its prices to ensure fills
+            if isinstance(broker, PaperBroker):
+                await broker.update_prices({req.ticker: price})
         except HTTPException:
             raise
         except Exception as exc:
@@ -190,9 +203,10 @@ async def submit_order(req: OrderRequest, db: Session = Depends(get_db)):
         logger.exception("Order execution failed for %s", req.ticker)
         raise HTTPException(status_code=500, detail="Order execution failed")
 
-    # Persist to DB
-    _save_trade_to_db(db, order, result, price or 0)
-    _save_broker_to_db(db)
+    # Persist only if it's the paper broker
+    if isinstance(broker, PaperBroker):
+        _save_trade_to_db(db, order, result, price or 0)
+        _save_broker_to_db(db)
 
     return {
         "order_id": result.order_id,
@@ -207,7 +221,7 @@ async def submit_order(req: OrderRequest, db: Session = Depends(get_db)):
 @router.get("/positions")
 async def get_positions(db: Session = Depends(get_db)):
     """Get all open positions."""
-    broker = _load_broker_from_db(db)
+    broker = _get_active_broker(db)
     try:
         positions = await broker.get_positions()
         return [
@@ -230,7 +244,7 @@ async def get_positions(db: Session = Depends(get_db)):
 @router.get("/portfolio")
 async def get_portfolio(db: Session = Depends(get_db)):
     """Get portfolio summary."""
-    broker = _load_broker_from_db(db)
+    broker = _get_active_broker(db)
     try:
         portfolio = await broker.get_portfolio()
         return {
@@ -260,7 +274,12 @@ async def get_portfolio(db: Session = Depends(get_db)):
 
 @router.get("/history")
 async def get_trade_history(db: Session = Depends(get_db)):
-    """Get trade history from database."""
+    """Get trade history."""
+    broker = _get_active_broker(db)
+    
+    if isinstance(broker, AlpacaBroker):
+        return await broker.get_trade_history()
+        
     portfolio = _get_or_create_portfolio(db)
     trades = (
         db.query(TradeDB)
@@ -286,8 +305,12 @@ async def get_trade_history(db: Session = Depends(get_db)):
 
 @router.post("/reset")
 async def reset_broker(db: Session = Depends(get_db)):
-    """Reset paper broker to initial state and clear DB."""
-    global _broker, _broker_loaded
+    """Reset paper broker to initial state and clear DB. No-op for live brokers."""
+    global _paper_broker, _paper_broker_loaded
+    broker = _get_active_broker(db)
+    
+    if isinstance(broker, AlpacaBroker):
+        raise HTTPException(status_code=400, detail="Cannot reset a live Alpaca broker via this endpoint.")
 
     portfolio = _get_or_create_portfolio(db)
 
@@ -298,7 +321,7 @@ async def reset_broker(db: Session = Depends(get_db)):
     db.commit()
 
     # Reset in-memory broker
-    _broker = PaperBroker(initial_cash=portfolio.initial_cash)
-    _broker_loaded = True
+    _paper_broker = PaperBroker(initial_cash=portfolio.initial_cash)
+    _paper_broker_loaded = True
 
     return {"detail": "Paper broker reset to initial state"}

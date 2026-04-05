@@ -1,3 +1,5 @@
+import { toast } from 'sonner';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // ── Type definitions ──────────────────────────────────────────────────────────
@@ -146,6 +148,48 @@ export interface BacktestRequest {
   end_date: string;
   initial_capital?: number;
   params?: Record<string, number>;
+  stop_loss_pct?: number;
+  take_profit_pct?: number;
+  atr_stop_multiplier?: number;
+}
+
+export interface ParamRange {
+  min: number;
+  max: number;
+  step?: number;
+  type: 'int' | 'float' | 'categorical';
+  options?: any[];
+}
+
+export interface OptimizeRequest {
+  ticker: string;
+  strategy_type: string;
+  start_date: string;
+  end_date: string;
+  initial_capital?: number;
+  param_ranges: Record<string, ParamRange>;
+  n_trials?: number;
+  metric?: 'sharpe_ratio' | 'total_return_pct' | 'win_rate';
+}
+
+export interface OptimizationTrial {
+  trial_id: number;
+  params: Record<string, any>;
+  metrics: {
+    total_return_pct: number;
+    sharpe_ratio: number;
+    win_rate: number;
+    max_drawdown_pct: number;
+    profit_factor: number;
+    final_value: number;
+  };
+}
+
+export interface OptimizationResponse {
+  best_params: Record<string, any>;
+  best_value: number;
+  metric: string;
+  trials: OptimizationTrial[];
 }
 
 export interface AutoTradeDecision {
@@ -225,17 +269,73 @@ export interface AutoTradeAnalysis {
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
-async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(error.detail || 'API error');
+interface FetchOptions extends RequestInit {
+  timeout?: number;
+  retries?: number;
+  silent?: boolean;
+}
+
+async function fetchJson<T>(
+  path: string,
+  options: FetchOptions = { timeout: 15000, retries: 2 }
+): Promise<T> {
+  const { timeout = 15000, retries = 2, silent = false, ...fetchOptions } = options;
+
+  let lastError: Error | null = null;
+
+  for (let i = 0; i <= retries; i++) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const res = await fetch(`${API_BASE}${path}`, {
+        headers: { 'Content-Type': 'application/json', ...fetchOptions.headers },
+        signal: controller.signal,
+        ...fetchOptions,
+      });
+
+      clearTimeout(id);
+
+      if (!res.ok) {
+        let errorMessage = `API error (${res.status})`;
+        try {
+          const errorData = await res.json();
+          errorMessage = errorData.detail || errorMessage;
+        } catch {
+          // Fallback to status text
+          errorMessage = res.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      if (res.status === 204) return undefined as T;
+      return await res.json();
+    } catch (err: any) {
+      clearTimeout(id);
+      lastError = err;
+
+      if (err.name === 'AbortError') {
+        lastError = new Error('Request timed out');
+      }
+
+      // Retry on network errors or timeouts, but not on business logic errors (4xx)
+      // unless it's a 429 or 5xx. For now, simple retry for everything except if we got a status.
+      // If lastError has no status, it might be a network error.
+      if (i < retries) {
+        const delay = Math.pow(2, i) * 1000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+    }
   }
-  if (res.status === 204) return undefined as T;
-  return res.json();
+
+  if (!silent && lastError) {
+    toast.error('API Error', {
+      description: lastError.message || 'Failed to communicate with the backend.',
+    });
+  }
+
+  throw lastError || new Error('Unknown fetch error');
 }
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -258,6 +358,11 @@ export const api = {
   backtest: {
     run: (data: BacktestRequest) =>
       fetchJson<BacktestResult>('/backtest/run', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    optimize: (data: OptimizeRequest) =>
+      fetchJson<OptimizationResponse>('/backtest/optimize', {
         method: 'POST',
         body: JSON.stringify(data),
       }),

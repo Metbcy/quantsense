@@ -47,15 +47,15 @@ export default function SettingsPage() {
   const [initialCash, setInitialCash] = useState("100000");
   const [groqKey, setGroqKey] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
-  const [anthropicKey, setAnthropicKey] = useState("");
   const [refreshInterval, setRefreshInterval] = useState(30);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [webhookSecret, setWebhookSecret] = useState("");
   const [resetting, setResetting] = useState(false);
 
   // Password visibility
   const [showGroq, setShowGroq] = useState(false);
   const [showOpenai, setShowOpenai] = useState(false);
-  const [showAnthropic, setShowAnthropic] = useState(false);
+  const [showWebhook, setShowWebhook] = useState(false);
 
   const loadConfig = useCallback(async () => {
     setConfigLoading(true);
@@ -64,7 +64,7 @@ export default function SettingsPage() {
       setInitialCash(cfg.initial_cash || "100000");
       setGroqKey(cfg.groq_api_key || "");
       setOpenaiKey(cfg.openai_api_key || "");
-      setAnthropicKey(cfg.anthropic_api_key || "");
+      setWebhookSecret(cfg.webhook_secret || "");
       setRefreshInterval(parseInt(cfg.sentiment_refresh_interval || "30", 10));
       setAutoRefresh(cfg.sentiment_auto_refresh === "true");
     } catch {
@@ -109,7 +109,7 @@ export default function SettingsPage() {
         initial_cash: initialCash,
         groq_api_key: groqKey,
         openai_api_key: openaiKey,
-        anthropic_api_key: anthropicKey,
+        webhook_secret: webhookSecret,
         sentiment_refresh_interval: refreshInterval.toString(),
         sentiment_auto_refresh: autoRefresh.toString(),
       });
@@ -288,13 +288,6 @@ export default function SettingsPage() {
               show: showOpenai,
               toggle: () => setShowOpenai(!showOpenai),
             },
-            {
-              label: "Anthropic API Key",
-              value: anthropicKey,
-              set: setAnthropicKey,
-              show: showAnthropic,
-              toggle: () => setShowAnthropic(!showAnthropic),
-            },
           ].map((field) => (
             <div key={field.label} className="space-y-1">
               <Label className="text-zinc-400">{field.label}</Label>
@@ -367,6 +360,56 @@ export default function SettingsPage() {
               checked={autoRefresh}
               onCheckedChange={setAutoRefresh}
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* TradingView Webhook */}
+      <Card className="border-zinc-800 bg-zinc-900/50">
+        <CardHeader>
+          <CardTitle className="text-zinc-100">TradingView Webhook</CardTitle>
+          <CardDescription className="text-zinc-500">
+            Execute trades directly from TradingView alerts
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1">
+            <Label className="text-zinc-400">Webhook URL</Label>
+            <div className="rounded-md border border-zinc-800 bg-zinc-950 p-2 font-mono text-[10px] text-blue-400">
+              {typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/tradingview` : '/api/webhooks/tradingview'}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-zinc-400">Webhook Secret</Label>
+            <div className="relative">
+              <Input
+                type={showWebhook ? "text" : "password"}
+                value={webhookSecret}
+                onChange={(e) => setWebhookSecret(e.target.value)}
+                placeholder="Enter a secure secret"
+                className="border-zinc-700 bg-zinc-950 pr-10 font-mono text-zinc-100"
+              />
+              <button
+                type="button"
+                onClick={() => setShowWebhook(!showWebhook)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+              >
+                {showWebhook ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-blue-500/5 p-3 border border-blue-500/10">
+            <p className="text-[10px] font-medium text-blue-400 uppercase tracking-wider mb-2">Message Template (JSON)</p>
+            <pre className="text-[10px] text-zinc-400 overflow-x-auto">
+{`{
+  "secret": "${webhookSecret || 'YOUR_SECRET'}",
+  "ticker": "{{ticker}}",
+  "action": "buy",
+  "quantity": 10
+}`}
+            </pre>
           </div>
         </CardContent>
       </Card>

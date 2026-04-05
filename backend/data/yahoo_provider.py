@@ -1,34 +1,42 @@
 import asyncio
+import logging
 from datetime import date
-from typing import Optional
+from typing import Any
 
 import yfinance as yf
 
 from data.provider import DataProvider, OHLCVBar, Quote, TickerInfo
+from data.utils import retry_async
+
+logger = logging.getLogger(__name__)
 
 
 class YahooFinanceProvider(DataProvider):
     """Data provider backed by yfinance."""
 
+    @retry_async(retries=3, delay=1.0, backoff=2.0)
+    async def _fetch_ohlcv(self, ticker: str, start: date, end: date, interval: str) -> Any:
+        return await asyncio.to_thread(
+            lambda: yf.download(
+                ticker,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                interval=interval,
+                progress=False,
+                auto_adjust=True,
+            )
+        )
+
     async def get_ohlcv(
         self, ticker: str, start: date, end: date, interval: str = "1d"
     ) -> list[OHLCVBar]:
         try:
-            df = await asyncio.to_thread(
-                lambda: yf.download(
-                    ticker,
-                    start=start.isoformat(),
-                    end=end.isoformat(),
-                    interval=interval,
-                    progress=False,
-                    auto_adjust=True,
-                )
-            )
-            if df is None or df.empty:
+            df = await self._fetch_ohlcv(ticker, start, end, interval)
+            if df is None or (hasattr(df, "empty") and df.empty):
                 return []
 
             # yfinance may return MultiIndex columns for single tickers
-            if isinstance(df.columns, __import__('pandas').MultiIndex):
+            if hasattr(df, "columns") and isinstance(df.columns, __import__('pandas').MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
             bars: list[OHLCVBar] = []
@@ -44,13 +52,18 @@ class YahooFinanceProvider(DataProvider):
                     )
                 )
             return bars
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error fetching OHLCV for {ticker} via Yahoo: {e}")
             return []
+
+    @retry_async(retries=3, delay=1.0)
+    async def _fetch_info(self, ticker: str) -> dict:
+        t = await asyncio.to_thread(lambda: yf.Ticker(ticker))
+        return await asyncio.to_thread(lambda: t.info)
 
     async def get_quote(self, ticker: str) -> Quote:
         try:
-            t = await asyncio.to_thread(lambda: yf.Ticker(ticker))
-            info = await asyncio.to_thread(lambda: t.info)
+            info = await self._fetch_info(ticker)
             price = info.get("currentPrice") or info.get("regularMarketPrice", 0.0)
             prev = info.get("previousClose") or info.get("regularMarketPreviousClose", 0.0)
             change = price - prev if price and prev else 0.0
@@ -64,7 +77,8 @@ class YahooFinanceProvider(DataProvider):
                 market_cap=info.get("marketCap"),
                 name=info.get("shortName") or info.get("longName"),
             )
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error fetching quote for {ticker} via Yahoo: {e}")
             return Quote(
                 ticker=ticker.upper(),
                 price=0.0,

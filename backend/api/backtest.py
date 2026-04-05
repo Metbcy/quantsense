@@ -11,12 +11,15 @@ from sqlalchemy.orm import Session
 
 from data.yahoo_provider import YahooFinanceProvider
 from engine.backtest import BacktestConfig, run_backtest
+from engine.optimizer import run_strategy_optimization
 from engine.strategy import STRATEGY_REGISTRY
 from models.database import get_db
 from models.pydantic_models import (
     BacktestRequest,
     BacktestResponse,
     BacktestTradeResponse,
+    OptimizeRequest,
+    OptimizationResponse,
 )
 from models.schemas import BacktestResult as BacktestResultModel
 from models.schemas import BacktestTrade as BacktestTradeModel
@@ -66,6 +69,9 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
         start_date=req.start_date,
         end_date=req.end_date,
         initial_capital=req.initial_capital,
+        stop_loss_pct=req.stop_loss_pct,
+        take_profit_pct=req.take_profit_pct,
+        atr_stop_multiplier=req.atr_stop_multiplier,
     )
 
     try:
@@ -118,6 +124,41 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
 
     # Build response matching frontend expected shape
     return _format_result(db_result, req.strategy_type, result.equity_curve, result.metrics)
+
+
+@router.post("/optimize", response_model=OptimizationResponse)
+async def optimize_strategy(req: OptimizeRequest):
+    """Search for the best strategy parameters."""
+    # 1. Fetch historical data
+    bars = await provider.get_ohlcv(req.ticker, req.start_date, req.end_date)
+    if not bars:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No OHLCV data found for {req.ticker} between {req.start_date} and {req.end_date}",
+        )
+
+    # 2. Run optimization
+    try:
+        # Convert param_ranges to dict for the optimizer
+        param_ranges_dict = {
+            name: pr.model_dump() for name, pr in req.param_ranges.items()
+        }
+        
+        result = run_strategy_optimization(
+            ticker=req.ticker,
+            strategy_type=req.strategy_type,
+            bars=bars,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            param_ranges=param_ranges_dict,
+            initial_capital=req.initial_capital,
+            n_trials=req.n_trials,
+            metric=req.metric
+        )
+        return result
+    except Exception as exc:
+        logger.exception("Optimization failed for %s", req.ticker)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 def _format_result(db_result, strategy_type: str = "", equity_curve=None, metrics_obj=None):

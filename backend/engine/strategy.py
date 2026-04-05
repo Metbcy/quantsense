@@ -329,6 +329,74 @@ class MACDStrategy(Strategy):
 
 
 # ---------------------------------------------------------------------------
+# Volume-Momentum Strategy
+# ---------------------------------------------------------------------------
+
+class VolumeMomentumStrategy(Strategy):
+    @property
+    def name(self) -> str:
+        return "volume_momentum"
+
+    @property
+    def description(self) -> str:
+        return "Momentum strategy confirmed by above-average volume."
+
+    def default_params(self) -> dict:
+        return {"sma_period": 20, "volume_sma_period": 20}
+
+    def generate_signals(
+        self,
+        bars: list[OHLCVBar],
+        sentiment_scores: list[float] | None = None,
+    ) -> list[Signal]:
+        closes = [b.close for b in bars]
+        volumes = [float(b.volume) for b in bars]
+
+        price_sma = sma(closes, self.params["sma_period"])
+        vol_sma = sma(volumes, self.params["volume_sma_period"])
+
+        signals: list[Signal] = []
+        for i in range(len(bars)):
+            if (
+                price_sma[i] is None
+                or (i > 0 and price_sma[i - 1] is None)
+                or vol_sma[i] is None
+            ):
+                signals.append(Signal(SignalType.HOLD, 0.0, "Insufficient data"))
+                continue
+
+            price = closes[i]
+            prev_price = closes[i - 1]
+            ma = price_sma[i]
+            prev_ma = price_sma[i - 1]
+
+            vol = volumes[i]
+            v_ma = vol_sma[i]
+
+            # Basic momentum
+            is_buy = prev_price <= prev_ma and price > ma
+            is_sell = prev_price >= prev_ma and price < ma
+
+            if is_buy:
+                if vol > v_ma:
+                    # Strength increases with volume relative to average
+                    strength = min((vol / v_ma - 1.0) * 2 + 0.5, 1.0)
+                    signals.append(
+                        Signal(SignalType.BUY, strength, "Price crossed above SMA with high volume")
+                    )
+                else:
+                    signals.append(
+                        Signal(SignalType.HOLD, 0.0, "Price crossed above SMA but volume is low")
+                    )
+            elif is_sell:
+                signals.append(Signal(SignalType.SELL, 0.5, "Price crossed below SMA"))
+            else:
+                signals.append(Signal(SignalType.HOLD, 0.0, "No crossover"))
+
+        return signals
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -336,6 +404,7 @@ STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "momentum": MomentumStrategy,
     "mean_reversion": MeanReversionStrategy,
     "sentiment_momentum": SentimentMomentumStrategy,
+    "volume_momentum": VolumeMomentumStrategy,
     "bollinger_bands": BollingerBandStrategy,
     "macd": MACDStrategy,
 }

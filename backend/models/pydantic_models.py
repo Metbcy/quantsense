@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -89,11 +89,50 @@ class StrategyResponse(BaseModel):
 
 class BacktestRequest(BaseModel):
     ticker: str
+...
+    atr_stop_multiplier: Optional[float] = Field(None, ge=0, le=10.0)
+
+
+# ── Optimization ───────────────────────────────────────────────────
+
+class ParamRange(BaseModel):
+    min: float
+    max: float
+    step: Optional[float] = None
+    type: str = "int" # "int", "float", "categorical"
+    options: Optional[list[Any]] = None
+
+class OptimizeRequest(BaseModel):
+    ticker: str
     strategy_type: str
-    params: dict = {}
     start_date: date
     end_date: date
-    initial_capital: float = Field(100000.0, gt=0, le=1e12)
+    initial_capital: float = 100000.0
+    param_ranges: dict[str, ParamRange]
+    n_trials: int = 50
+    metric: str = "sharpe_ratio" # "total_return_pct", "sharpe_ratio", "win_rate"
+
+class OptimizationTrial(BaseModel):
+    params: dict
+    metrics: dict
+    trial_id: int
+
+class OptimizationResponse(BaseModel):
+    best_params: dict
+    best_value: float
+    metric: str
+    trials: list[OptimizationTrial]
+
+
+# ── Webhooks ────────────────────────────────────────────────────────
+
+class TradingViewWebhook(BaseModel):
+    secret: str
+    ticker: str
+    action: str # "buy", "sell"
+    quantity: float
+    order_type: str = "market"
+    price: Optional[float] = None
 
 
 class BacktestTradeResponse(BaseModel):

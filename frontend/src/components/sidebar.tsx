@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
+import { HealthIndicator } from "@/components/health-indicator";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -80,6 +81,7 @@ export function DesktopSidebar() {
     <aside className="hidden md:flex md:w-56 md:flex-col md:fixed md:inset-y-0 z-30 border-r border-zinc-800/60 bg-zinc-950">
       <Logo />
       <NavLinks />
+      <HealthIndicator />
     </aside>
   );
 }
@@ -97,10 +99,13 @@ export function MobileSidebar() {
             <span className="sr-only">Toggle menu</span>
           </Button>
         </SheetTrigger>
-        <SheetContent side="left" className="w-56 bg-zinc-950 p-0 border-zinc-800/60">
+        <SheetContent side="left" className="w-56 bg-zinc-950 p-0 border-zinc-800/60 flex flex-col">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <Logo />
-          <NavLinks onNavigate={() => setOpen(false)} />
+          <div className="flex-1">
+            <NavLinks onNavigate={() => setOpen(false)} />
+          </div>
+          <HealthIndicator />
         </SheetContent>
       </Sheet>
     </div>

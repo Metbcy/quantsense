@@ -15,6 +15,7 @@ from engine.indicators import rsi, sma
 from sentiment.aggregator import create_aggregator
 from trading.broker import Order, OrderSide, OrderType
 from trading.paper_broker import PaperBroker
+from notifications.telegram import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class AutoTrader:
         self.broker = broker
         self.provider = YahooFinanceProvider()
         self.aggregator = create_aggregator()
+        self.notifier = TelegramNotifier()
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
         self.max_position_pct = max_position_pct
@@ -235,7 +237,7 @@ class AutoTrader:
 
             try:
                 result = await self.broker.submit_order(order)
-                results.append({
+                execution_res = {
                     "ticker": decision.ticker,
                     "action": decision.action,
                     "status": result.status.value,
@@ -243,7 +245,12 @@ class AutoTrader:
                     "quantity": result.filled_quantity,
                     "confidence": decision.confidence,
                     "reasons": decision.reasons,
-                })
+                }
+                results.append(execution_res)
+                
+                # Notify via Telegram
+                await self.notifier.notify_execution(execution_res)
+
                 logger.info(
                     "Auto-trade: %s %s x%.0f @ $%.2f (confidence: %.0f%%)",
                     decision.action.upper(),
@@ -269,7 +276,7 @@ class AutoTrader:
         results = await self.execute_decisions(decisions)
         portfolio = await self.broker.get_portfolio()
 
-        return {
+        res = {
             "timestamp": datetime.now().isoformat(),
             "decisions": [
                 {
@@ -291,3 +298,8 @@ class AutoTrader:
                 "total_pnl_pct": portfolio.total_pnl_pct,
             },
         }
+        
+        # Notify cycle summary
+        await self.notifier.notify_cycle_summary(res)
+        
+        return res

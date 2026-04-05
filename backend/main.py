@@ -10,6 +10,7 @@ from api.market import router as market_router
 from api.settings import router as settings_router
 from api.websocket import router as ws_router
 from api.auto_trade import router as auto_trade_router
+from api.webhooks import router as webhooks_router
 
 
 @asynccontextmanager
@@ -38,6 +39,7 @@ app.include_router(backtest_router, prefix="/api/backtest", tags=["backtest"])
 app.include_router(sentiment_router, prefix="/api/sentiment", tags=["sentiment"])
 app.include_router(trading_router, prefix="/api/trading", tags=["trading"])
 app.include_router(auto_trade_router, prefix="/api/auto-trade", tags=["auto-trade"])
+app.include_router(webhooks_router, prefix="/api/webhooks", tags=["webhooks"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(ws_router, prefix="/api/ws", tags=["websocket"])
 

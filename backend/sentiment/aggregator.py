@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sentiment.llm_provider import (
-    AnthropicProvider,
+    CopilotProvider,
     GroqProvider,
     LLMProvider,
     OpenAIProvider,
@@ -165,7 +165,7 @@ def create_aggregator() -> SentimentAggregator:
     llm_candidates: list[LLMProvider] = [
         GroqProvider(),
         OpenAIProvider(),
-        AnthropicProvider(),
+        CopilotProvider(),
     ]
     for provider in llm_candidates:
         if provider.is_available():

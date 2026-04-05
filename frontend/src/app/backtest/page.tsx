@@ -251,6 +251,7 @@ export default function BacktestPage() {
   const [startDate, setStartDate] = useState<Date | undefined>(dates.start);
   const [endDate, setEndDate] = useState<Date | undefined>(dates.end);
   const [initialCapital, setInitialCapital] = useState(100000);
+  const [atrStopMultiplier, setAtrStopMultiplier] = useState<number | undefined>();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [eduExpanded, setEduExpanded] = useState(false);
@@ -301,6 +302,7 @@ export default function BacktestPage() {
         end_date: dateToStr(endDate),
         initial_capital: initialCapital,
         params,
+        atr_stop_multiplier: atrStopMultiplier,
       };
       const res = await api.backtest.run(req);
       setResult(res);
@@ -508,6 +510,28 @@ export default function BacktestPage() {
                   }
                   className="border-zinc-700 bg-zinc-950 text-zinc-100"
                 />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <Label className="text-zinc-400">ATR Stop Multiplier</Label>
+                  <span className="text-xs text-zinc-500">(Optional)</span>
+                </div>
+                <Input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  value={atrStopMultiplier === undefined ? "" : atrStopMultiplier}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setAtrStopMultiplier(val === "" ? undefined : parseFloat(val));
+                  }}
+                  placeholder="e.g. 2.0"
+                  className="border-zinc-700 bg-zinc-950 text-zinc-100 placeholder:text-zinc-600"
+                />
+                <p className="text-xs text-zinc-500 mt-1">
+                  Dynamic trailing stop based on Average True Range volatility.
+                </p>
               </div>
 
               <Button

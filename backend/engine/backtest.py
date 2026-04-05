@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from data.provider import OHLCVBar
 
+from .indicators import atr
 from .strategy import Signal, SignalType, Strategy
 
 
@@ -32,6 +33,7 @@ class BacktestConfig:
     position_size_pct: float = 0.95
     stop_loss_pct: float | None = None
     take_profit_pct: float | None = None
+    atr_stop_multiplier: float | None = None
 
 
 @dataclass
@@ -76,6 +78,7 @@ class _Position:
     quantity: float = 0.0
     avg_entry_price: float = 0.0
     peak_price: float = 0.0  # for trailing stop
+    atr_stop_price: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +111,20 @@ def run_backtest(
 
     signals = config.strategy.generate_signals(filtered_bars, sentiment)
 
+    # Pre-calculate ATR for ATR-based stop loss if needed
+    atr_filtered: list[float | None] = [None] * len(filtered_bars)
+    if config.atr_stop_multiplier is not None:
+        all_highs = [b.high for b in bars]
+        all_lows = [b.low for b in bars]
+        all_closes = [b.close for b in bars]
+        all_atrs = atr(all_highs, all_lows, all_closes, period=14)
+        
+        bar_dates = {b.date: idx for idx, b in enumerate(bars)}
+        for idx, fb in enumerate(filtered_bars):
+            orig_idx = bar_dates.get(fb.date)
+            if orig_idx is not None:
+                atr_filtered[idx] = all_atrs[orig_idx]
+
     cash = config.initial_capital
     pos = _Position()
     trades: list[BacktestTradeRecord] = []
@@ -123,6 +140,10 @@ def run_backtest(
                 stop_price = pos.peak_price * (1 - config.stop_loss_pct)
                 if price <= stop_price:
                     signal = Signal(SignalType.SELL, 1.0, "Stop-loss triggered")
+
+            if pos.atr_stop_price is not None:
+                if price <= pos.atr_stop_price:
+                    signal = Signal(SignalType.SELL, 1.0, "ATR Stop-loss triggered")
 
             if config.take_profit_pct is not None:
                 target = pos.avg_entry_price * (1 + config.take_profit_pct)
@@ -145,6 +166,10 @@ def run_backtest(
                 pos.quantity = qty
                 pos.avg_entry_price = price
                 pos.peak_price = price
+                
+                if config.atr_stop_multiplier is not None and atr_filtered[i] is not None:
+                    pos.atr_stop_price = price - (atr_filtered[i] * config.atr_stop_multiplier)
+                
                 trades.append(
                     BacktestTradeRecord(
                         date=bar.date,
@@ -175,6 +200,7 @@ def run_backtest(
             pos.quantity = 0.0
             pos.avg_entry_price = 0.0
             pos.peak_price = 0.0
+            pos.atr_stop_price = None
 
         # Portfolio value = cash + position mark-to-market.
         portfolio_value = cash + pos.quantity * price

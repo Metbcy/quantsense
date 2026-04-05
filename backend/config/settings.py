@@ -13,7 +13,15 @@ class Settings(BaseSettings):
     REDDIT_CLIENT_SECRET: Optional[str] = None
     GROQ_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
-    ANTHROPIC_API_KEY: Optional[str] = None
+
+    TELEGRAM_BOT_TOKEN: Optional[str] = None
+    TELEGRAM_CHAT_ID: Optional[str] = None
+
+    ALPACA_API_KEY: Optional[str] = None
+    ALPACA_SECRET_KEY: Optional[str] = None
+    ALPACA_PAPER: bool = True
+
+    WEBHOOK_SECRET: str = "quantsense_secret_123"
 
     PAPER_TRADING_INITIAL_CASH: float = 100000.0
     SENTIMENT_REFRESH_MINUTES: int = 30
@@ -27,10 +35,6 @@ class Settings(BaseSettings):
     @property
     def openai_api_key(self) -> str:
         return self.OPENAI_API_KEY or ""
-
-    @property
-    def anthropic_api_key(self) -> str:
-        return self.ANTHROPIC_API_KEY or ""
 
     @property
     def newsapi_key(self) -> str:
