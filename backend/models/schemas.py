@@ -8,13 +8,28 @@ from sqlalchemy.sql import func
 from models.database import Base
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    watchlist_items: Mapped[list["Watchlist"]] = relationship(back_populates="user")
+    portfolios: Mapped[list["Portfolio"]] = relationship(back_populates="user")
+
+
 class Watchlist(Base):
     __tablename__ = "watchlist"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ticker: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+
+    user: Mapped[Optional["User"]] = relationship(back_populates="watchlist_items")
 
 
 class OHLCVData(Base):
@@ -116,7 +131,9 @@ class Portfolio(Base):
     cash: Mapped[float] = mapped_column(Float, nullable=False)
     initial_cash: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
 
+    user: Mapped[Optional["User"]] = relationship(back_populates="portfolios")
     positions: Mapped[list["Position"]] = relationship(back_populates="portfolio")
     trades: Mapped[list["Trade"]] = relationship(back_populates="portfolio")
 

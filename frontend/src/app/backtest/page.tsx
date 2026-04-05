@@ -63,7 +63,7 @@ import type {
   BacktestResult,
   BacktestRequest,
 } from "@/lib/api";
-import { Loading } from "@/components/loading";
+import { Loading, LoadingCard } from "@/components/loading";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

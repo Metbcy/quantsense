@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from data.yahoo_provider import YahooFinanceProvider
+from data.shared import provider
 from engine.screener import screen_tickers
 from models.database import get_db
 from models.schemas import Watchlist
@@ -14,7 +14,6 @@ from models.schemas import Watchlist
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-provider = YahooFinanceProvider()
 
 
 @router.get("/search")

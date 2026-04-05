@@ -11,20 +11,26 @@ from data.utils import retry_async
 logger = logging.getLogger(__name__)
 
 
+EXTERNAL_TIMEOUT = 30  # seconds for external API calls
+
+
 class YahooFinanceProvider(DataProvider):
     """Data provider backed by yfinance."""
 
     @retry_async(retries=3, delay=1.0, backoff=2.0)
     async def _fetch_ohlcv(self, ticker: str, start: date, end: date, interval: str) -> Any:
-        return await asyncio.to_thread(
-            lambda: yf.download(
-                ticker,
-                start=start.isoformat(),
-                end=end.isoformat(),
-                interval=interval,
-                progress=False,
-                auto_adjust=True,
-            )
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: yf.download(
+                    ticker,
+                    start=start.isoformat(),
+                    end=end.isoformat(),
+                    interval=interval,
+                    progress=False,
+                    auto_adjust=True,
+                )
+            ),
+            timeout=EXTERNAL_TIMEOUT,
         )
 
     async def get_ohlcv(
@@ -58,8 +64,10 @@ class YahooFinanceProvider(DataProvider):
 
     @retry_async(retries=3, delay=1.0)
     async def _fetch_info(self, ticker: str) -> dict:
-        t = await asyncio.to_thread(lambda: yf.Ticker(ticker))
-        return await asyncio.to_thread(lambda: t.info)
+        async def _do():
+            t = await asyncio.to_thread(lambda: yf.Ticker(ticker))
+            return await asyncio.to_thread(lambda: t.info)
+        return await asyncio.wait_for(_do(), timeout=EXTERNAL_TIMEOUT)
 
     async def get_quote(self, ticker: str) -> Quote:
         try:
@@ -90,8 +98,12 @@ class YahooFinanceProvider(DataProvider):
     async def search_ticker(self, query: str) -> list[TickerInfo]:
         try:
             results: list[TickerInfo] = []
-            search = await asyncio.to_thread(lambda: yf.Ticker(query))
-            info = await asyncio.to_thread(lambda: search.info)
+            search = await asyncio.wait_for(
+                asyncio.to_thread(lambda: yf.Ticker(query)), timeout=EXTERNAL_TIMEOUT
+            )
+            info = await asyncio.wait_for(
+                asyncio.to_thread(lambda: search.info), timeout=EXTERNAL_TIMEOUT
+            )
             if info and info.get("symbol"):
                 results.append(
                     TickerInfo(

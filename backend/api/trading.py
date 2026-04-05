@@ -9,10 +9,11 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from data.yahoo_provider import YahooFinanceProvider
+from auth import get_current_user
+from data.shared import provider as _provider_instance
 from models.database import get_db
 from models.pydantic_models import OrderRequest
-from models.schemas import Portfolio as PortfolioDB, Position as PositionDB, Trade as TradeDB
+from models.schemas import Portfolio as PortfolioDB, Position as PositionDB, Trade as TradeDB, User
 from trading.broker import Broker, Order, OrderSide, OrderStatus, OrderType
 from trading.paper_broker import PaperBroker
 from trading.alpaca_broker import AlpacaBroker
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_provider = YahooFinanceProvider()
+_provider = _provider_instance
 _paper_broker: PaperBroker | None = None
 _alpaca_broker: AlpacaBroker | None = None
 _paper_broker_loaded = False
@@ -45,11 +46,19 @@ def _get_active_broker(db: Session) -> Broker:
     return _paper_broker
 
 
-def _get_or_create_portfolio(db: Session) -> PortfolioDB:
+def _get_or_create_portfolio(db: Session, user: User | None = None) -> PortfolioDB:
     """Get the default portfolio from DB, creating if needed."""
-    portfolio = db.query(PortfolioDB).filter(PortfolioDB.name == "default").first()
+    q = db.query(PortfolioDB).filter(PortfolioDB.name == "default")
+    if user is not None:
+        q = q.filter(PortfolioDB.user_id == user.id)
+    else:
+        q = q.filter(PortfolioDB.user_id.is_(None))
+    portfolio = q.first()
     if not portfolio:
-        portfolio = PortfolioDB(name="default", cash=100000.0, initial_cash=100000.0)
+        portfolio = PortfolioDB(
+            name="default", cash=100000.0, initial_cash=100000.0,
+            user_id=user.id if user else None,
+        )
         db.add(portfolio)
         db.commit()
         db.refresh(portfolio)
@@ -158,7 +167,11 @@ def _save_trade_to_db(db: Session, order: Order, result, price: float):
 
 
 @router.post("/order")
-async def submit_order(req: OrderRequest, db: Session = Depends(get_db)):
+async def submit_order(
+    req: OrderRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user),
+):
     """Submit a paper-trading or live order."""
     broker = _get_active_broker(db)
 
@@ -226,7 +239,10 @@ async def submit_order(req: OrderRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/positions")
-async def get_positions(db: Session = Depends(get_db)):
+async def get_positions(
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user),
+):
     """Get all open positions."""
     broker = _get_active_broker(db)
     try:
@@ -249,7 +265,10 @@ async def get_positions(db: Session = Depends(get_db)):
 
 
 @router.get("/portfolio")
-async def get_portfolio(db: Session = Depends(get_db)):
+async def get_portfolio(
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user),
+):
     """Get portfolio summary."""
     broker = _get_active_broker(db)
     try:
@@ -284,6 +303,7 @@ async def get_trade_history(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user),
 ):
     """Get trade history (paginated)."""
     broker = _get_active_broker(db)
@@ -295,7 +315,7 @@ async def get_trade_history(
     page_size = min(max(1, page_size), 200)
     offset = (page - 1) * page_size
 
-    portfolio = _get_or_create_portfolio(db)
+    portfolio = _get_or_create_portfolio(db, user)
     query = (
         db.query(TradeDB)
         .filter(TradeDB.portfolio_id == portfolio.id)
@@ -326,7 +346,10 @@ async def get_trade_history(
 
 
 @router.post("/reset")
-async def reset_broker(db: Session = Depends(get_db)):
+async def reset_broker(
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user),
+):
     """Reset paper broker to initial state and clear DB. No-op for live brokers."""
     global _paper_broker, _paper_broker_loaded
     broker = _get_active_broker(db)
@@ -334,7 +357,7 @@ async def reset_broker(db: Session = Depends(get_db)):
     if isinstance(broker, AlpacaBroker):
         raise HTTPException(status_code=400, detail="Cannot reset a live Alpaca broker via this endpoint.")
 
-    portfolio = _get_or_create_portfolio(db)
+    portfolio = _get_or_create_portfolio(db, user)
 
     # Clear DB records
     db.query(TradeDB).filter(TradeDB.portfolio_id == portfolio.id).delete()

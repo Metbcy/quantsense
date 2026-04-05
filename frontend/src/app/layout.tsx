@@ -3,6 +3,8 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopSidebar, MobileSidebar } from "@/components/sidebar";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { AuthProvider } from "@/lib/auth-context";
+import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -28,17 +30,20 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${jetbrainsMono.variable} dark h-full antialiased`}
+      className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
       <body className="min-h-full bg-background text-foreground">
+        <ThemeProvider>
+        <AuthProvider>
         <DesktopSidebar />
 
         {/* Main content area, offset by sidebar width on desktop */}
         <div className="md:pl-56 min-h-screen flex flex-col">
           {/* Mobile header */}
-          <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-zinc-800/60 bg-background/80 px-4 backdrop-blur-md md:hidden">
+          <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md md:hidden">
             <MobileSidebar />
-            <span className="text-sm font-semibold tracking-tight text-zinc-100">
+            <span className="text-sm font-semibold tracking-tight text-foreground">
               QuantSense
             </span>
           </header>
@@ -49,6 +54,8 @@ export default function RootLayout({
         </div>
 
         <Toaster position="bottom-right" />
+        </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

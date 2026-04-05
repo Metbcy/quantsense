@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from data.yahoo_provider import YahooFinanceProvider
+from data.shared import provider
 from engine.backtest import BacktestConfig, run_backtest
 from engine.optimizer import run_strategy_optimization
 from engine.strategy import STRATEGY_REGISTRY
@@ -26,7 +26,6 @@ from models.schemas import BacktestTrade as BacktestTradeModel
 from models.schemas import Strategy as StrategyModel
 
 router = APIRouter()
-provider = YahooFinanceProvider()
 logger = logging.getLogger(__name__)
 
 

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from data.yahoo_provider import YahooFinanceProvider
+from data.shared import provider as _shared_provider
 from models.database import SessionLocal
 from models.schemas import Watchlist
 from api.trading import _get_active_broker, _load_broker_from_db
@@ -46,7 +46,7 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-_provider = YahooFinanceProvider()
+_provider = _shared_provider
 
 
 def _get_watchlist_tickers() -> list[str]:

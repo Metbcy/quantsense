@@ -1,7 +1,12 @@
 from functools import lru_cache
+import secrets
 
 from pydantic_settings import BaseSettings
 from typing import Optional
+
+
+def _generate_secret() -> str:
+    return secrets.token_urlsafe(32)
 
 
 class Settings(BaseSettings):
@@ -21,12 +26,19 @@ class Settings(BaseSettings):
     ALPACA_SECRET_KEY: Optional[str] = None
     ALPACA_PAPER: bool = True
 
-    WEBHOOK_SECRET: str = "quantsense_secret_123"
+    JWT_SECRET: str = "change-me-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+
+    WEBHOOK_SECRET: str = "quantsense_secret_123"  # Set via env var in production
 
     PAPER_TRADING_INITIAL_CASH: float = 100000.0
     SENTIMENT_REFRESH_MINUTES: int = 30
 
-    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3030"
+    AUTO_TRADE_INTERVAL_MINUTES: int = 30
+    AUTO_TRADE_ENABLED: bool = False
+
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3030,http://127.0.0.1:3030"
     RATE_LIMIT: str = "60/minute"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

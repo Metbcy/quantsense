@@ -1,82 +1,107 @@
-"""Background scheduler for periodic sentiment refresh."""
+"""Background sentiment refresh using APScheduler.
 
-import asyncio
+Wired into the FastAPI lifespan so it starts/stops with the app.
+Reads the watchlist from the DB each cycle, runs the full sentiment
+pipeline, and persists results — exactly like the manual /analyze endpoint.
+"""
+
 import logging
-from datetime import datetime
 
-from sentiment.aggregator import create_aggregator, SentimentAggregator
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from config.settings import get_settings
+from models.database import SessionLocal
+from models.schemas import SentimentAggregate, SentimentRecord, Watchlist
+from sentiment.aggregator import create_aggregator
 
 logger = logging.getLogger(__name__)
 
+_scheduler: AsyncIOScheduler | None = None
 
-class SentimentScheduler:
-    """Runs sentiment analysis on watchlist tickers at a configurable interval."""
 
-    def __init__(self, interval_minutes: int = 30):
-        self.interval_minutes = interval_minutes
-        self.aggregator: SentimentAggregator | None = None
-        self._task: asyncio.Task | None = None
-        self._running = False
-        self._watchlist: list[str] = []
-
-    def update_watchlist(self, tickers: list[str]):
-        self._watchlist = tickers
-
-    def update_interval(self, minutes: int):
-        self.interval_minutes = max(5, minutes)
-
-    async def start(self):
-        if self._running:
-            return
-        self._running = True
-        self.aggregator = create_aggregator()
-        self._task = asyncio.create_task(self._run_loop())
-        logger.info("Sentiment scheduler started (interval=%dm)", self.interval_minutes)
-
-    async def stop(self):
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        logger.info("Sentiment scheduler stopped")
-
-    async def _run_loop(self):
-        while self._running:
-            try:
-                await self._refresh_all()
-            except Exception as e:
-                logger.error("Sentiment refresh error: %s", e)
-            await asyncio.sleep(self.interval_minutes * 60)
-
-    async def _refresh_all(self):
-        if not self._watchlist or not self.aggregator:
+async def _refresh_watchlist_sentiment() -> None:
+    """Analyze sentiment for every ticker in the watchlist."""
+    db = SessionLocal()
+    try:
+        tickers = [w.ticker for w in db.query(Watchlist).all()]
+        if not tickers:
+            logger.debug("Sentiment scheduler: watchlist empty, skipping")
             return
 
-        logger.info("Refreshing sentiment for %d tickers", len(self._watchlist))
-        results = []
-        for ticker in self._watchlist:
+        logger.info("Sentiment scheduler: refreshing %d tickers", len(tickers))
+        aggregator = create_aggregator()
+
+        for ticker in tickers:
             try:
-                result = await self.aggregator.analyze_ticker(ticker)
-                results.append(result)
-                logger.info(
-                    "Sentiment for %s: %.2f (%s)",
-                    ticker,
-                    result.overall_score,
-                    result.trend,
+                result = await aggregator.analyze_ticker(ticker)
+
+                for item in result.headlines:
+                    db.add(SentimentRecord(
+                        ticker=ticker,
+                        source=item.get("source", "unknown"),
+                        headline=item.get("headline", ""),
+                        snippet=None,
+                        vader_score=item.get("score", 0.0),
+                        llm_score=result.llm_score,
+                        llm_summary=None,
+                    ))
+
+                existing = (
+                    db.query(SentimentAggregate)
+                    .filter(SentimentAggregate.ticker == ticker)
+                    .first()
                 )
-            except Exception as e:
-                logger.warning("Failed to analyze %s: %s", ticker, e)
+                if existing:
+                    existing.score = result.overall_score
+                    existing.trend = result.trend
+                    existing.num_sources = result.num_sources
+                else:
+                    db.add(SentimentAggregate(
+                        ticker=ticker,
+                        score=result.overall_score,
+                        trend=result.trend,
+                        num_sources=result.num_sources,
+                    ))
 
-        return results
+                db.commit()
+                logger.info(
+                    "Sentiment refreshed: %s score=%.3f (%d sources)",
+                    ticker, result.overall_score, result.num_sources,
+                )
+            except Exception:
+                db.rollback()
+                logger.exception("Sentiment refresh failed for %s", ticker)
+    finally:
+        db.close()
 
-    async def analyze_single(self, ticker: str):
-        if not self.aggregator:
-            self.aggregator = create_aggregator()
-        return await self.aggregator.analyze_ticker(ticker)
+
+def start_scheduler() -> AsyncIOScheduler:
+    """Start the background sentiment scheduler. Call once at app startup."""
+    global _scheduler
+    if _scheduler is not None:
+        return _scheduler
+
+    settings = get_settings()
+    interval = settings.SENTIMENT_REFRESH_MINUTES
+
+    _scheduler = AsyncIOScheduler()
+    _scheduler.add_job(
+        _refresh_watchlist_sentiment,
+        "interval",
+        minutes=interval,
+        id="sentiment_refresh",
+        name=f"Sentiment refresh (every {interval}m)",
+        replace_existing=True,
+    )
+    _scheduler.start()
+    logger.info("Sentiment scheduler started (interval=%dm)", interval)
+    return _scheduler
 
 
-# Module-level singleton
-scheduler = SentimentScheduler()
+def stop_scheduler() -> None:
+    """Shut down the scheduler gracefully."""
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
+        _scheduler = None
+        logger.info("Sentiment scheduler stopped")

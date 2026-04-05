@@ -113,8 +113,12 @@ class YahooNewsFetcher(NewsFetcher):
             import asyncio
             import yfinance as yf
 
-            t = await asyncio.to_thread(lambda: yf.Ticker(ticker))
-            news = await asyncio.to_thread(lambda: t.news)
+            t = await asyncio.wait_for(
+                asyncio.to_thread(lambda: yf.Ticker(ticker)), timeout=30
+            )
+            news = await asyncio.wait_for(
+                asyncio.to_thread(lambda: t.news), timeout=30
+            )
             if not news:
                 return []
 

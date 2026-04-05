@@ -84,7 +84,7 @@ def _get_copilot_token(github_token: str) -> dict:
 
 
 def get_token() -> str:
-    """Return a valid Copilot session token, authenticating if needed."""
+    """Return a valid Copilot session token. Raises RuntimeError if no cached token."""
     cache = _load_cache()
 
     if cache and cache.get("copilot_token") and cache.get("copilot_expires_at"):
@@ -101,6 +101,14 @@ def get_token() -> str:
         except Exception:
             pass
 
+    # Don't run interactive device flow in a server context — it blocks the event loop
+    raise RuntimeError(
+        "No cached Copilot token. Run 'python -m sentiment.ghcp_auth' to authenticate."
+    )
+
+
+if __name__ == "__main__":
+    """Run interactive device-flow authentication."""
     gh_token = device_flow_login()
     cp = _get_copilot_token(gh_token)
     _save_cache(
@@ -110,4 +118,4 @@ def get_token() -> str:
             "copilot_expires_at": cp["expires_at"],
         }
     )
-    return cp["token"]
+    print("Token cached successfully.")

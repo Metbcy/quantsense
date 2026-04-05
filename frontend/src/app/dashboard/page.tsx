@@ -32,7 +32,7 @@ import { usePortfolio } from "@/lib/hooks";
 import { useFetch } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import type { ScreenerResult } from "@/lib/api";
-import { Loading } from "@/components/loading";
+import { DashboardSkeleton } from "@/components/loading";
 
 // Generate 30 days of mock portfolio history
 function generateMockHistory(currentValue: number) {
@@ -88,7 +88,7 @@ export default function DashboardPage() {
     return generateMockHistory(portfolio.total_value);
   }, [portfolio]);
 
-  if (loading) return <Loading />;
+  if (loading) return <DashboardSkeleton />;
 
   if (error) {
     return (

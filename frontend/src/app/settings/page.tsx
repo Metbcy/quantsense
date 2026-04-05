@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { useWatchlist } from "@/lib/hooks";
 import { api } from "@/lib/api";
-import { Loading } from "@/components/loading";
+import { SettingsSkeleton } from "@/components/loading";
 
 export default function SettingsPage() {
   const { watchlist, loading: watchlistLoading, add, remove } = useWatchlist();
@@ -133,7 +133,7 @@ export default function SettingsPage() {
     }
   }
 
-  if (configLoading) return <Loading />;
+  if (configLoading) return <SettingsSkeleton />;
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
