@@ -53,3 +53,65 @@ def test_snapshots_ordered_by_time(db_session):
     assert len(snaps) == 3
     assert snaps[0].total_value == 100000
     assert snaps[2].total_value == 99500
+
+
+from datetime import timedelta
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from models.database import Base
+
+
+def test_history_endpoint_returns_points():
+    """GET /api/portfolio/history returns snapshot points filtered by period."""
+    from models.database import get_db
+    from fastapi import FastAPI
+    from api.portfolio_history import router
+
+    # Use StaticPool so all connections share the same in-memory DB,
+    # including those made from TestClient's background thread.
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    try:
+        portfolio = PortfolioDB(name="default", cash=100000.0, initial_cash=100000.0)
+        session.add(portfolio)
+        session.commit()
+
+        now = datetime.utcnow()
+        for i in range(48):
+            snap = PortfolioSnapshot(
+                portfolio_id=portfolio.id,
+                total_value=100000 + i * 100,
+                cash=50000.0,
+                positions_value=50000 + i * 100,
+                recorded_at=now - timedelta(hours=48 - i),
+            )
+            session.add(snap)
+        session.commit()
+
+        app = FastAPI()
+        app.dependency_overrides[get_db] = lambda: session
+        app.include_router(router, prefix="/api/portfolio")
+        client = TestClient(app)
+
+        res = client.get("/api/portfolio/history?period=1W")
+        assert res.status_code == 200
+        data = res.json()
+        assert "points" in data
+        assert len(data["points"]) == 48
+
+        res = client.get("/api/portfolio/history?period=1M")
+        assert res.status_code == 200
+        assert len(res.json()["points"]) == 48
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()

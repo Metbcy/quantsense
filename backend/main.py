@@ -19,6 +19,7 @@ from api.settings import router as settings_router
 from api.websocket import router as ws_router
 from api.auto_trade import router as auto_trade_router
 from api.webhooks import router as webhooks_router
+from api.portfolio_history import router as portfolio_history_router
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,7 @@ app.include_router(auto_trade_router, prefix="/api/auto-trade", tags=["auto-trad
 app.include_router(webhooks_router, prefix="/api/webhooks", tags=["webhooks"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(ws_router, prefix="/api/ws", tags=["websocket"])
+app.include_router(portfolio_history_router, prefix="/api/portfolio", tags=["portfolio"])
 
 
 @app.get("/api/health")
