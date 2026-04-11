@@ -21,6 +21,7 @@ from models.schemas import (  # noqa: F401
     Position,
     Trade,
     AppSetting,
+    PortfolioSnapshot,
 )
 
 config = context.config
