@@ -180,6 +180,21 @@ class Trade(Base):
     portfolio: Mapped["Portfolio"] = relationship(back_populates="trades")
 
 
+class PortfolioSnapshot(Base):
+    __tablename__ = "portfolio_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    portfolio_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("portfolios.id"), nullable=False, index=True
+    )
+    total_value: Mapped[float] = mapped_column(Float, nullable=False)
+    cash: Mapped[float] = mapped_column(Float, nullable=False)
+    positions_value: Mapped[float] = mapped_column(Float, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), index=True)
+
+    portfolio: Mapped["Portfolio"] = relationship()
+
+
 class AppSetting(Base):
     __tablename__ = "app_settings"
 

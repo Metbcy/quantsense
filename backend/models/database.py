@@ -47,6 +47,7 @@ def init_db() -> None:
         Position,
         Trade,
         AppSetting,
+        PortfolioSnapshot,
     )
     Base.metadata.create_all(bind=engine)
     _db_initialized = True
