@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useState, useMemo } from "react";
 import {
   AreaChart,
   Area,
@@ -34,26 +34,6 @@ import { api } from "@/lib/api";
 import type { ScreenerResult } from "@/lib/api";
 import { DashboardSkeleton } from "@/components/loading";
 
-// Generate 30 days of mock portfolio history
-function generateMockHistory(currentValue: number) {
-  const data = [];
-  const now = new Date();
-  let val = currentValue * 0.92;
-  for (let i = 29; i >= 0; i--) {
-    const date = new Date(now);
-    date.setDate(date.getDate() - i);
-    val += (Math.random() - 0.45) * currentValue * 0.015;
-    val = Math.max(val, currentValue * 0.8);
-    data.push({
-      date: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      value: Math.round(val * 100) / 100,
-    });
-  }
-  // Ensure last point matches current value
-  data[data.length - 1].value = currentValue;
-  return data;
-}
-
 function formatCurrency(n: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -83,10 +63,25 @@ export default function DashboardPage() {
     loading: screenerLoading,
   } = useFetch<ScreenerResult[]>(() => api.market.screener(), []);
 
+  const [period, setPeriod] = useState("1M");
+  const {
+    data: historyData,
+    loading: historyLoading,
+  } = useFetch<{ points: { timestamp: string; total_value: number; cash: number }[] }>(
+    () => api.portfolio.history(period),
+    [period]
+  );
+
   const chartData = useMemo(() => {
-    if (!portfolio) return [];
-    return generateMockHistory(portfolio.total_value);
-  }, [portfolio]);
+    if (!historyData?.points?.length) return [];
+    return historyData.points.map((p) => ({
+      date: new Date(p.timestamp).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      }),
+      value: p.total_value,
+    }));
+  }, [historyData]);
 
   if (loading) return <DashboardSkeleton />;
 
@@ -170,52 +165,77 @@ export default function DashboardPage() {
 
       {/* Portfolio Chart */}
       <Card className="border-zinc-800 bg-zinc-900">
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-zinc-100">Portfolio Value</CardTitle>
+          <div className="flex gap-1">
+            {["1W", "1M", "3M", "1Y", "All"].map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p.toLowerCase() === "all" ? "all" : p)}
+                className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  period === (p.toLowerCase() === "all" ? "all" : p)
+                    ? "bg-blue-600 text-white"
+                    : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="portfolioGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fill: "#71717a", fontSize: 12 }}
-                  axisLine={{ stroke: "#3f3f46" }}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fill: "#71717a", fontSize: 12 }}
-                  axisLine={{ stroke: "#3f3f46" }}
-                  tickLine={false}
-                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
-                  domain={["auto", "auto"]}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#18181b",
-                    border: "1px solid #3f3f46",
-                    borderRadius: "8px",
-                    color: "#f4f4f5",
-                  }}
-                  formatter={(value) => [formatCurrency(Number(value)), "Value"]}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#3b82f6"
-                  strokeWidth={2}
-                  fill="url(#portfolioGrad)"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          {chartData.length < 2 ? (
+            <div className="flex h-[300px] items-center justify-center text-zinc-500">
+              <div className="text-center">
+                <Activity className="mx-auto mb-2 size-8" />
+                <p className="text-sm">Portfolio history will appear here</p>
+                <p className="text-xs text-zinc-600 mt-1">Snapshots are taken hourly</p>
+              </div>
+            </div>
+          ) : (
+            <div className="h-[300px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="portfolioGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: "#71717a", fontSize: 12 }}
+                    axisLine={{ stroke: "#3f3f46" }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fill: "#71717a", fontSize: 12 }}
+                    axisLine={{ stroke: "#3f3f46" }}
+                    tickLine={false}
+                    tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                    domain={["auto", "auto"]}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#18181b",
+                      border: "1px solid #3f3f46",
+                      borderRadius: "8px",
+                      color: "#f4f4f5",
+                    }}
+                    formatter={(value) => [formatCurrency(Number(value)), "Value"]}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="value"
+                    stroke="#3b82f6"
+                    strokeWidth={2}
+                    fill="url(#portfolioGrad)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </CardContent>
       </Card>
 
