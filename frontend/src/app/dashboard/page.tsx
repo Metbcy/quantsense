@@ -31,7 +31,7 @@ import { Badge } from "@/components/ui/badge";
 import { usePortfolio } from "@/lib/hooks";
 import { useFetch } from "@/lib/hooks";
 import { api } from "@/lib/api";
-import type { ScreenerResult } from "@/lib/api";
+import type { ScreenerResult, TradeRecord } from "@/lib/api";
 import { DashboardSkeleton } from "@/components/loading";
 
 function formatCurrency(n: number) {
@@ -62,6 +62,14 @@ export default function DashboardPage() {
     data: screenerData,
     loading: screenerLoading,
   } = useFetch<ScreenerResult[]>(() => api.market.screener(), []);
+
+  const {
+    data: tradesData,
+    loading: tradesLoading,
+  } = useFetch<{ items: TradeRecord[]; total: number }>(
+    () => api.trading.history(1, 10),
+    []
+  );
 
   const [period, setPeriod] = useState("1M");
   const {
@@ -242,7 +250,7 @@ export default function DashboardPage() {
       {/* Bottom Row */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Holdings Table */}
-        <Card className="border-zinc-800 bg-zinc-900 lg:col-span-2">
+        <Card className="border-zinc-800 bg-zinc-900">
           <CardHeader>
             <CardTitle className="text-zinc-100">Holdings</CardTitle>
           </CardHeader>
@@ -300,6 +308,62 @@ export default function DashboardPage() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Recent Trades */}
+        <Card className="border-zinc-800 bg-zinc-900">
+          <CardHeader>
+            <CardTitle className="text-zinc-100">Recent Trades</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {tradesLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-10 animate-pulse rounded bg-zinc-800" />
+                ))}
+              </div>
+            ) : !tradesData?.items?.length ? (
+              <div className="flex flex-col items-center justify-center py-8 text-zinc-500">
+                <Activity className="mb-2 size-6" />
+                <p className="text-sm">No trades yet</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {tradesData.items.slice(0, 10).map((trade) => (
+                  <div
+                    key={trade.id}
+                    className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        className={
+                          trade.side === "buy"
+                            ? "bg-green-500/20 text-green-400"
+                            : "bg-red-500/20 text-red-400"
+                        }
+                      >
+                        {trade.side.toUpperCase()}
+                      </Badge>
+                      <span className="font-mono font-semibold text-zinc-100">
+                        {trade.ticker}
+                      </span>
+                      <span className="text-xs text-zinc-500">
+                        {trade.quantity} @ ${trade.price.toFixed(2)}
+                      </span>
+                    </div>
+                    <span className="text-xs text-zinc-500">
+                      {trade.timestamp
+                        ? new Date(trade.timestamp).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                          })
+                        : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
           </CardContent>
         </Card>
