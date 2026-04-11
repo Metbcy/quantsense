@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import traceback
@@ -10,6 +11,7 @@ from contextlib import asynccontextmanager
 
 from config.settings import settings
 from models.database import init_db, SessionLocal
+from models.schemas import Portfolio as PortfolioDB, PortfolioSnapshot, Position as PositionDB
 from api.auth import router as auth_router
 from api.backtest import router as backtest_router
 from api.sentiment import router as sentiment_router
@@ -46,6 +48,35 @@ def setup_logging():
     root.setLevel(logging.INFO)
 
 
+async def _snapshot_loop():
+    """Take a portfolio snapshot every hour."""
+    while True:
+        await asyncio.sleep(3600)  # 1 hour
+        try:
+            db = SessionLocal()
+            try:
+                portfolio = db.query(PortfolioDB).filter(PortfolioDB.name == "default").first()
+                if portfolio:
+                    positions = db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).all()
+                    positions_value = sum(
+                        p.current_price * p.quantity for p in positions if p.quantity > 0
+                    )
+                    total_value = portfolio.cash + positions_value
+                    snap = PortfolioSnapshot(
+                        portfolio_id=portfolio.id,
+                        total_value=total_value,
+                        cash=portfolio.cash,
+                        positions_value=positions_value,
+                    )
+                    db.add(snap)
+                    db.commit()
+                    logger.info("Portfolio snapshot: $%.2f", total_value)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Snapshot task failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
@@ -59,7 +90,9 @@ async def lifespan(app: FastAPI):
     # Start background sentiment scheduler
     from sentiment.scheduler import start_scheduler, stop_scheduler
     start_scheduler()
+    snapshot_task = asyncio.create_task(_snapshot_loop())
     yield
+    snapshot_task.cancel()
     stop_scheduler()
     logger.info("QuantSense API shutting down")
 
