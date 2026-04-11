@@ -13,7 +13,7 @@ from auth import get_current_user
 from data.shared import provider as _provider_instance
 from models.database import get_db
 from models.pydantic_models import OrderRequest
-from models.schemas import Portfolio as PortfolioDB, Position as PositionDB, Trade as TradeDB, User
+from models.schemas import Portfolio as PortfolioDB, Position as PositionDB, PortfolioSnapshot, Trade as TradeDB, User
 from trading.broker import Broker, Order, OrderSide, OrderStatus, OrderType
 from trading.paper_broker import PaperBroker
 from trading.alpaca_broker import AlpacaBroker
@@ -161,6 +161,11 @@ def _save_trade_to_db(db: Session, order: Order, result, price: float):
         sentiment_score=None,
         status=result.status.value,
     )
+    # Get realized_pnl from the paper broker's last recorded trade
+    if _paper_broker and _paper_broker.trades:
+        last_trade = _paper_broker.trades[-1]
+        trade.realized_pnl = last_trade.get("realized_pnl", 0.0)
+
     db.add(trade)
     portfolio.cash = _paper_broker.cash
     db.commit()
@@ -227,6 +232,20 @@ async def submit_order(
         if result.status == OrderStatus.FILLED:
             _save_trade_to_db(db, order, result, result.filled_price)
         _save_broker_to_db(db)
+
+        # Take a snapshot after each trade
+        portfolio_db = _get_or_create_portfolio(db, user)
+        positions = db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio_db.id).all()
+        positions_value = sum(p.current_price * p.quantity for p in positions if p.quantity > 0)
+        total_value = portfolio_db.cash + positions_value
+        snap = PortfolioSnapshot(
+            portfolio_id=portfolio_db.id,
+            total_value=total_value,
+            cash=portfolio_db.cash,
+            positions_value=positions_value,
+        )
+        db.add(snap)
+        db.commit()
 
     return {
         "order_id": result.order_id,
@@ -334,6 +353,7 @@ async def get_trade_history(
                 "price": t.price,
                 "quantity": t.quantity,
                 "value": t.value or (t.price * t.quantity),
+                "realized_pnl": getattr(t, 'realized_pnl', 0.0),
                 "status": t.status,
                 "timestamp": t.created_at.isoformat() if t.created_at else None,
             }

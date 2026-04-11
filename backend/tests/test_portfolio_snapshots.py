@@ -1,6 +1,6 @@
 """Tests for portfolio snapshot persistence."""
 import pytest
-from datetime import datetime
+from datetime import datetime, UTC
 from models.schemas import Portfolio as PortfolioDB, PortfolioSnapshot
 
 
@@ -85,7 +85,7 @@ def test_history_endpoint_returns_points():
         session.add(portfolio)
         session.commit()
 
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         for i in range(48):
             snap = PortfolioSnapshot(
                 portfolio_id=portfolio.id,

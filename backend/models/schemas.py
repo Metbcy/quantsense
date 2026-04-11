@@ -170,6 +170,7 @@ class Trade(Base):
     price: Mapped[float] = mapped_column(Float, nullable=False)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     value: Mapped[float] = mapped_column(Float, nullable=False)
+    realized_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     strategy_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     sentiment_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(

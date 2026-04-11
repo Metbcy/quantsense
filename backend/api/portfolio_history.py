@@ -1,7 +1,7 @@
 """Portfolio history endpoint — serves time-series of portfolio snapshots."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -39,7 +39,7 @@ def get_portfolio_history(
     )
 
     if period != "all":
-        cutoff = datetime.utcnow() - PERIOD_DELTAS[period]
+        cutoff = datetime.now(UTC) - PERIOD_DELTAS[period]
         query = query.filter(PortfolioSnapshot.recorded_at >= cutoff)
 
     query = query.order_by(PortfolioSnapshot.recorded_at.asc())
