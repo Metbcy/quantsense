@@ -17,6 +17,8 @@ import {
   Wallet,
   BarChart3,
   Activity,
+  Star,
+  X,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -28,8 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { usePortfolio } from "@/lib/hooks";
-import { useFetch } from "@/lib/hooks";
+import { usePortfolio, useFetch, useWatchlist } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import type { ScreenerResult, TradeRecord } from "@/lib/api";
 import { DashboardSkeleton } from "@/components/loading";
@@ -58,6 +59,7 @@ function PnlText({ value, className = "" }: { value: number; className?: string 
 
 export default function DashboardPage() {
   const { portfolio, loading, error } = usePortfolio();
+  const { watchlist, loading: watchlistLoading, remove: removeFromWatchlist } = useWatchlist();
   const {
     data: screenerData,
     loading: screenerLoading,
@@ -425,6 +427,60 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Watchlist */}
+      <Card className="border-zinc-800 bg-zinc-900">
+        <CardHeader>
+          <CardTitle className="text-zinc-100 flex items-center gap-2">
+            <Star className="size-4" />
+            Watchlist
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {watchlistLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-10 animate-pulse rounded bg-zinc-800" />
+              ))}
+            </div>
+          ) : !watchlist?.length ? (
+            <div className="flex flex-col items-center justify-center py-8 text-zinc-500">
+              <Star className="mb-2 size-6" />
+              <p className="text-sm">No watchlist items</p>
+              <p className="text-xs text-zinc-600 mt-1">
+                Add symbols from the Settings page
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {watchlist.map((item) => (
+                <div
+                  key={item.ticker}
+                  className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2"
+                >
+                  <div>
+                    <span className="font-mono font-semibold text-zinc-100">
+                      {item.ticker}
+                    </span>
+                    {item.name && (
+                      <span className="ml-2 text-xs text-zinc-500 truncate max-w-[120px] inline-block align-middle">
+                        {item.name}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => removeFromWatchlist(item.ticker)}
+                    className="text-zinc-600 hover:text-red-400 transition-colors"
+                    title="Remove from watchlist"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
