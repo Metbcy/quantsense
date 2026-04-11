@@ -137,6 +137,12 @@ export interface Portfolio {
   daily_pnl: number;
 }
 
+export interface PortfolioHistoryPoint {
+  timestamp: string;
+  total_value: number;
+  cash: number;
+}
+
 export interface TradeRecord {
   id: string;
   ticker: string;
@@ -481,6 +487,11 @@ export const api = {
     history: (page = 1, pageSize = 50) =>
       fetchJson<PaginatedResponse<TradeRecord>>(`/trading/history?page=${page}&page_size=${pageSize}`),
     reset: () => fetchJson<void>('/trading/reset', { method: 'POST' }),
+  },
+
+  portfolio: {
+    history: (period: string = '1M') =>
+      fetchJson<{ points: PortfolioHistoryPoint[] }>(`/portfolio/history?period=${encodeURIComponent(period)}`),
   },
 
   settings: {
