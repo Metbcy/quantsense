@@ -24,13 +24,13 @@ export function DatePicker({
         <Button
           variant="outline"
           className={cn(
-            "w-full justify-start text-left font-normal border-zinc-700 bg-zinc-950 hover:bg-zinc-900",
-            !date && "text-zinc-500"
+            "w-full justify-start text-left font-normal border-border bg-background hover:bg-muted",
+            !date && "text-muted-foreground"
           )}
         >
-          <CalendarIcon className="mr-2 h-4 w-4 text-zinc-400" />
+          <CalendarIcon className="mr-2 h-4 w-4 text-muted-foreground" />
           {date ? (
-            <span className="text-zinc-100">
+            <span className="text-foreground">
               {format(date, "MMM d, yyyy")}
             </span>
           ) : (

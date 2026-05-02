@@ -34,6 +34,22 @@ FastAPI; SQLite (default) or any SQLAlchemy-compatible DB.
 ### Frontend (`frontend/`)
 Next.js + Tailwind. Backtest builder, equity-curve charts, trade table, walk-forward results view, significance panel.
 
+The visual identity is an **editorial trading terminal** — warm-paper light mode, deep-charcoal dark mode, a single ochre accent, hairline borders, and tabular numerals throughout. Numbers should look like numbers, not like decoration.
+
+#### Screenshots
+
+| | Light | Dark |
+|---|---|---|
+| Dashboard | ![](docs/screenshots/02-dashboard-light.png) | ![](docs/screenshots/02-dashboard-dark.png) |
+| Backtest | ![](docs/screenshots/03-backtest-light.png) | ![](docs/screenshots/03-backtest-dark.png) |
+| Charts | ![](docs/screenshots/04-charts-light.png) | ![](docs/screenshots/04-charts-dark.png) |
+| Compare | ![](docs/screenshots/05-compare-light.png) | ![](docs/screenshots/05-compare-dark.png) |
+| Sentiment | ![](docs/screenshots/06-sentiment-light.png) | ![](docs/screenshots/06-sentiment-dark.png) |
+| Settings | ![](docs/screenshots/07-settings-light.png) | ![](docs/screenshots/07-settings-dark.png) |
+| Login | ![](docs/screenshots/01-login-light.png) | ![](docs/screenshots/01-login-dark.png) |
+
+Regenerate via `node scripts/screenshots.mjs` (requires the backend on `:8765` and a built frontend on `:3210`; defaults overridable with `BASE` and `API` env vars).
+
 ---
 
 ## Design choices

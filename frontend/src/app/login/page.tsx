@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, LogIn, UserPlus } from "lucide-react";
 import { toast } from "sonner";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,63 +38,81 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-[80vh] items-center justify-center">
-      <Card className="w-full max-w-sm border-border bg-card">
-        <CardHeader className="text-center">
-          <CardTitle className="text-xl text-card-foreground">
-            {mode === "login" ? "Welcome Back" : "Create Account"}
-          </CardTitle>
-          <CardDescription className="text-muted-foreground">
-            {mode === "login"
-              ? "Sign in to your QuantSense account"
-              : "Register a new account"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">Username</Label>
+    <div className="flex min-h-[80vh] items-center justify-center px-4">
+      <div className="w-full max-w-sm">
+        {/* Brand mark */}
+        <div className="mb-8 flex flex-col items-center gap-2 text-center">
+          <div className="flex items-center gap-1.5">
+            <span className="text-lg font-medium tracking-tight text-foreground">
+              quantsense
+            </span>
+            <span className="size-1.5 rounded-full bg-primary" aria-hidden />
+          </div>
+          <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            Editorial Trading Terminal
+          </span>
+        </div>
+
+        {/* Card */}
+        <div className="rounded-md border border-border bg-card">
+          <div className="border-b border-border px-5 py-4">
+            <h1 className="text-base font-semibold tracking-tight text-foreground">
+              {mode === "login" ? "Sign in" : "Create account"}
+            </h1>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {mode === "login"
+                ? "Access your portfolio and research."
+                : "Register a new quantsense account."}
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4 px-5 py-5">
+            <div className="space-y-1.5">
+              <Label htmlFor="username">Username</Label>
               <Input
+                id="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter username"
+                placeholder="username"
                 autoComplete="username"
-                className="border-border bg-input text-foreground placeholder:text-muted-foreground"
+                className="font-mono"
               />
             </div>
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">Password</Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="password">Password</Label>
               <Input
+                id="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
+                placeholder="••••••••"
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
-                className="border-border bg-input text-foreground placeholder:text-muted-foreground"
+                className="font-mono"
               />
             </div>
             <Button
               type="submit"
               disabled={loading || !username.trim() || !password}
-              className="w-full bg-blue-600 text-white hover:bg-blue-700"
+              className="w-full"
             >
               {loading ? (
-                <Loader2 className="mr-2 size-4 animate-spin" />
+                <Loader2 className="mr-1.5 size-4 animate-spin" />
               ) : mode === "login" ? (
-                <LogIn className="mr-2 size-4" />
+                <LogIn className="mr-1.5 size-4" />
               ) : (
-                <UserPlus className="mr-2 size-4" />
+                <UserPlus className="mr-1.5 size-4" />
               )}
-              {mode === "login" ? "Sign In" : "Register"}
+              {mode === "login" ? "Sign in" : "Register"}
             </Button>
           </form>
-          <div className="mt-4 text-center text-sm text-muted-foreground">
+
+          <div className="border-t border-border px-5 py-3 text-center text-xs text-muted-foreground">
             {mode === "login" ? (
               <>
                 No account?{" "}
                 <button
                   onClick={() => setMode("register")}
-                  className="text-blue-400 hover:underline"
+                  className="font-medium text-primary underline-offset-4 hover:underline"
                 >
                   Register
                 </button>
@@ -105,15 +122,15 @@ export default function LoginPage() {
                 Already have an account?{" "}
                 <button
                   onClick={() => setMode("login")}
-                  className="text-blue-400 hover:underline"
+                  className="font-medium text-primary underline-offset-4 hover:underline"
                 >
                   Sign in
                 </button>
               </>
             )}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

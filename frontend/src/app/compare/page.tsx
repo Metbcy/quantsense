@@ -11,7 +11,7 @@ import {
   CartesianGrid,
   Cell,
 } from "recharts";
-import { BarChart3, Loader2, Play } from "lucide-react";
+import { Play } from "lucide-react";
 import { toast } from "sonner";
 import { format as fnsFormat } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,19 +28,14 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { DatePicker } from "@/components/ui/date-picker";
+import { PageHeader } from "@/components/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import type { CompareResponse, CompareResult } from "@/lib/api";
+import type { CompareResponse } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 function formatPct(n: number) {
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
-}
-
-function formatCurrency(n: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 0,
-  }).format(n);
 }
 
 export default function ComparePage() {
@@ -70,7 +65,7 @@ export default function ComparePage() {
         Number(capital) || 100000
       );
       setData(result);
-      toast.success("Comparison complete!");
+      toast.success("Comparison complete");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Comparison failed");
     } finally {
@@ -95,33 +90,34 @@ export default function ComparePage() {
   }));
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-zinc-100">
-          <BarChart3 className="size-6 text-blue-400" />
-          Strategy Comparison
-        </h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Run all 5 strategies against the same ticker to find the best one
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Analysis"
+        title="Strategy comparison"
+        description="Run all strategies side-by-side against the same ticker and window."
+        actions={
+          <Button onClick={handleCompare} disabled={loading} size="sm">
+            <Play className="mr-1.5 size-3.5" />
+            {loading ? "Running…" : "Compare all"}
+          </Button>
+        }
+      />
 
       {/* Config */}
-      <Card className="border-zinc-800 bg-zinc-900">
-        <CardContent className="pt-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5 items-end">
+      <Card>
+        <CardContent className="pt-4">
+          <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <div className="space-y-1.5">
-              <Label className="text-zinc-400">Ticker</Label>
+              <Label className="text-xs">Ticker</Label>
               <Input
                 placeholder="AAPL"
                 value={ticker}
                 onChange={(e) => setTicker(e.target.value.toUpperCase())}
-                className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                className="font-mono tabular-nums"
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-zinc-400">Start Date</Label>
+              <Label className="text-xs">Start date</Label>
               <DatePicker
                 date={startDate}
                 onDateChange={setStartDate}
@@ -129,7 +125,7 @@ export default function ComparePage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-zinc-400">End Date</Label>
+              <Label className="text-xs">End date</Label>
               <DatePicker
                 date={endDate}
                 onDateChange={setEndDate}
@@ -137,163 +133,180 @@ export default function ComparePage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-zinc-400">Initial Capital</Label>
+              <Label className="text-xs">Initial capital</Label>
               <Input
                 type="number"
                 value={capital}
                 onChange={(e) => setCapital(e.target.value)}
-                className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                className="font-mono tabular-nums"
               />
             </div>
-            <Button
-              onClick={handleCompare}
-              disabled={loading}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {loading ? (
-                <Loader2 className="mr-2 size-4 animate-spin" />
-              ) : (
-                <Play className="mr-2 size-4" />
-              )}
-              {loading ? "Running…" : "Compare All"}
+            <Button onClick={handleCompare} disabled={loading}>
+              <Play className="mr-1.5 size-3.5" />
+              {loading ? "Running…" : "Compare all"}
             </Button>
           </div>
         </CardContent>
       </Card>
 
-      {/* Results */}
+      {/* Empty / Loading */}
       {!data && !loading && (
-        <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
-          <BarChart3 className="mb-3 size-10" />
-          <p>Enter a ticker and run comparison to see results</p>
-        </div>
+        <Card>
+          <CardContent className="py-10">
+            <div className="space-y-3">
+              <Skeleton className="h-6 w-1/3" />
+              <Skeleton className="h-32 w-full" />
+              <p className="pt-2 text-center text-xs text-muted-foreground">
+                Enter a ticker and run comparison to see results.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {loading && (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="size-8 animate-spin text-blue-400" />
+        <div className="space-y-3">
+          <Skeleton className="h-9 w-1/4" />
+          <Skeleton className="h-64 w-full" />
         </div>
       )}
 
       {data && !loading && (
-        <div className="space-y-6">
+        <div className="flex flex-col gap-5">
           {/* Ranked table */}
-          <Card className="border-zinc-800 bg-zinc-900">
-            <CardHeader>
-              <CardTitle className="text-zinc-100">
-                Rankings — {data.ticker}
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>
+                Rankings ·{" "}
+                <span className="font-mono tabular-nums">{data.ticker}</span>
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-zinc-800">
-                      <TableHead className="text-zinc-400">Rank</TableHead>
-                      <TableHead className="text-zinc-400">Strategy</TableHead>
-                      <TableHead className="text-zinc-400 text-right">Return</TableHead>
-                      <TableHead className="text-zinc-400 text-right">Sharpe</TableHead>
-                      <TableHead className="text-zinc-400 text-right">Max DD</TableHead>
-                      <TableHead className="text-zinc-400 text-right">Win Rate</TableHead>
-                      <TableHead className="text-zinc-400 text-right">Trades</TableHead>
-                      <TableHead className="text-zinc-400 text-right">Profit Factor</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {ranked.map((r, i) => {
-                      const isWinner = r.winner || i === 0;
-                      return (
-                        <TableRow
-                          key={r.strategy_type}
-                          className={
-                            isWinner
-                              ? "border-yellow-500/40 bg-yellow-500/5"
-                              : "border-zinc-800"
-                          }
+            <CardContent className="px-0 pt-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-4">Rank</TableHead>
+                    <TableHead>Strategy</TableHead>
+                    <TableHead className="text-right">Return</TableHead>
+                    <TableHead className="text-right">Sharpe</TableHead>
+                    <TableHead className="text-right">Max DD</TableHead>
+                    <TableHead className="text-right">Win rate</TableHead>
+                    <TableHead className="text-right">Trades</TableHead>
+                    <TableHead className="pr-4 text-right">Profit factor</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ranked.map((r, i) => {
+                    const isWinner = r.winner || i === 0;
+                    return (
+                      <TableRow
+                        key={r.strategy_type}
+                        className={cn(isWinner && "bg-primary/5")}
+                      >
+                        <TableCell className="pl-4 font-mono tabular-nums text-muted-foreground">
+                          #{i + 1}
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium text-foreground">
+                            {r.strategy_name}
+                          </span>
+                          {isWinner && (
+                            <Badge
+                              variant="outline"
+                              className="ml-2 border-primary/40 font-mono text-[10px] uppercase tracking-wider text-primary"
+                            >
+                              Winner
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            "text-right font-mono tabular-nums",
+                            r.metrics.total_return_pct >= 0
+                              ? "text-profit"
+                              : "text-loss",
+                          )}
                         >
-                          <TableCell className="font-medium text-zinc-300">
-                            {isWinner ? "👑" : `#${i + 1}`}
-                          </TableCell>
-                          <TableCell>
-                            <span className="font-medium text-zinc-100">
-                              {r.strategy_name}
-                            </span>
-                            {isWinner && (
-                              <Badge className="ml-2 bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-[10px]">
-                                Winner
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell
-                            className={`text-right font-mono ${
-                              r.metrics.total_return_pct >= 0
-                                ? "text-emerald-400"
-                                : "text-red-400"
-                            }`}
-                          >
-                            {formatPct(r.metrics.total_return_pct)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-zinc-300">
-                            {r.metrics.sharpe_ratio.toFixed(2)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-red-400">
-                            {r.metrics.max_drawdown_pct.toFixed(2)}%
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-zinc-300">
-                            {(r.metrics.win_rate * 100).toFixed(1)}%
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-zinc-300">
-                            {r.metrics.total_trades}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-zinc-300">
-                            {r.metrics.profit_factor.toFixed(2)}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
+                          {formatPct(r.metrics.total_return_pct)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono tabular-nums">
+                          {r.metrics.sharpe_ratio.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono tabular-nums text-loss">
+                          {r.metrics.max_drawdown_pct.toFixed(2)}%
+                        </TableCell>
+                        <TableCell className="text-right font-mono tabular-nums">
+                          {(r.metrics.win_rate * 100).toFixed(1)}%
+                        </TableCell>
+                        <TableCell className="text-right font-mono tabular-nums">
+                          {r.metrics.total_trades}
+                        </TableCell>
+                        <TableCell className="pr-4 text-right font-mono tabular-nums">
+                          {r.metrics.profit_factor.toFixed(2)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
 
           {/* Charts row */}
-          <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid gap-5 lg:grid-cols-2">
             {/* Return chart */}
-            <Card className="border-zinc-800 bg-zinc-900">
-              <CardHeader>
-                <CardTitle className="text-sm text-zinc-300">
-                  Total Return %
-                </CardTitle>
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Total return %</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="pt-3">
                 <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={returnChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <BarChart
+                    data={returnChartData}
+                    margin={{ top: 6, right: 6, left: 0, bottom: 0 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="2 4"
+                      stroke="var(--border)"
+                      vertical={false}
+                    />
                     <XAxis
                       dataKey="name"
-                      tick={{ fill: "#71717a", fontSize: 11 }}
-                      axisLine={{ stroke: "#3f3f46" }}
+                      tick={{
+                        fill: "var(--muted-foreground)",
+                        fontSize: 11,
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      axisLine={{ stroke: "var(--border)" }}
+                      tickLine={false}
                     />
                     <YAxis
-                      tick={{ fill: "#71717a", fontSize: 11 }}
-                      axisLine={{ stroke: "#3f3f46" }}
+                      tick={{
+                        fill: "var(--muted-foreground)",
+                        fontSize: 11,
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      axisLine={{ stroke: "var(--border)" }}
+                      tickLine={false}
                       tickFormatter={(v: number) => `${v}%`}
                     />
                     <RechartsTooltip
                       contentStyle={{
-                        backgroundColor: "#18181b",
-                        border: "1px solid #3f3f46",
-                        borderRadius: 8,
-                        color: "#e4e4e7",
+                        backgroundColor: "var(--popover)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "0.375rem",
+                        color: "var(--popover-foreground)",
+                        fontSize: 12,
+                        fontFamily: "var(--font-mono)",
                       }}
                       formatter={(value) => [`${value}%`, "Return"]}
+                      cursor={{ fill: "var(--muted)", opacity: 0.4 }}
                     />
-                    <Bar dataKey="return" radius={[4, 4, 0, 0]}>
+                    <Bar dataKey="return" radius={[2, 2, 0, 0]}>
                       {returnChartData.map((entry, idx) => (
                         <Cell
                           key={idx}
-                          fill={entry.return >= 0 ? "#34d399" : "#f87171"}
+                          fill={entry.return >= 0 ? "var(--profit)" : "var(--loss)"}
                         />
                       ))}
                     </Bar>
@@ -303,39 +316,57 @@ export default function ComparePage() {
             </Card>
 
             {/* Sharpe chart */}
-            <Card className="border-zinc-800 bg-zinc-900">
-              <CardHeader>
-                <CardTitle className="text-sm text-zinc-300">
-                  Sharpe Ratio
-                </CardTitle>
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Sharpe ratio</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="pt-3">
                 <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={sharpeChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <BarChart
+                    data={sharpeChartData}
+                    margin={{ top: 6, right: 6, left: 0, bottom: 0 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="2 4"
+                      stroke="var(--border)"
+                      vertical={false}
+                    />
                     <XAxis
                       dataKey="name"
-                      tick={{ fill: "#71717a", fontSize: 11 }}
-                      axisLine={{ stroke: "#3f3f46" }}
+                      tick={{
+                        fill: "var(--muted-foreground)",
+                        fontSize: 11,
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      axisLine={{ stroke: "var(--border)" }}
+                      tickLine={false}
                     />
                     <YAxis
-                      tick={{ fill: "#71717a", fontSize: 11 }}
-                      axisLine={{ stroke: "#3f3f46" }}
+                      tick={{
+                        fill: "var(--muted-foreground)",
+                        fontSize: 11,
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      axisLine={{ stroke: "var(--border)" }}
+                      tickLine={false}
                     />
                     <RechartsTooltip
                       contentStyle={{
-                        backgroundColor: "#18181b",
-                        border: "1px solid #3f3f46",
-                        borderRadius: 8,
-                        color: "#e4e4e7",
+                        backgroundColor: "var(--popover)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "0.375rem",
+                        color: "var(--popover-foreground)",
+                        fontSize: 12,
+                        fontFamily: "var(--font-mono)",
                       }}
                       formatter={(value) => [Number(value).toFixed(2), "Sharpe"]}
+                      cursor={{ fill: "var(--muted)", opacity: 0.4 }}
                     />
-                    <Bar dataKey="sharpe" radius={[4, 4, 0, 0]}>
+                    <Bar dataKey="sharpe" radius={[2, 2, 0, 0]}>
                       {sharpeChartData.map((entry, idx) => (
                         <Cell
                           key={idx}
-                          fill={entry.sharpe >= 0 ? "#60a5fa" : "#f87171"}
+                          fill={entry.sharpe >= 0 ? "var(--primary)" : "var(--loss)"}
                         />
                       ))}
                     </Bar>

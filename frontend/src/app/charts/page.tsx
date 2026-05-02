@@ -13,15 +13,18 @@ import {
 } from "recharts";
 import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineSeries } from "lightweight-charts";
 import type { IChartApi } from "lightweight-charts";
-import { LineChart as LineChartIcon, Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { toast } from "sonner";
 import { format as fnsFormat, subMonths, subYears } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
+import { Stat } from "@/components/ui/stat";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import type { OHLCVBar } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -115,6 +118,12 @@ function getStartDate(range: TimeRange): Date {
   }
 }
 
+function readCssVar(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function ChartsPage() {
@@ -182,26 +191,30 @@ export default function ChartsPage() {
 
     const container = chartContainerRef.current;
 
+    const bg = readCssVar("--card", "#fafaf7");
+    const text = readCssVar("--muted-foreground", "#71717a");
+    const border = readCssVar("--border", "#27272a");
+    const profit = readCssVar("--profit", "#22c55e");
+    const loss = readCssVar("--loss", "#ef4444");
+    const primary = readCssVar("--primary", "#3b82f6");
+
     const chart = createChart(container, {
       layout: {
-        background: { type: ColorType.Solid, color: "#0a0a0f" },
-        textColor: "#71717a",
+        background: { type: ColorType.Solid, color: bg },
+        textColor: text,
+        fontFamily: "var(--font-mono), ui-monospace, monospace",
       },
       grid: {
-        vertLines: { color: "#1f1f23" },
-        horzLines: { color: "#1f1f23" },
+        vertLines: { color: border, style: 1 },
+        horzLines: { color: border, style: 1 },
       },
       width: container.clientWidth,
       height: 420,
-      timeScale: {
-        borderColor: "#1f1f23",
-      },
-      rightPriceScale: {
-        borderColor: "#1f1f23",
-      },
+      timeScale: { borderColor: border },
+      rightPriceScale: { borderColor: border },
       crosshair: {
-        horzLine: { color: "#3f3f46" },
-        vertLine: { color: "#3f3f46" },
+        horzLine: { color: text },
+        vertLine: { color: text },
       },
     });
 
@@ -209,12 +222,12 @@ export default function ChartsPage() {
 
     // Candlestick series
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#22c55e",
-      downColor: "#ef4444",
-      borderDownColor: "#ef4444",
-      borderUpColor: "#22c55e",
-      wickDownColor: "#ef4444",
-      wickUpColor: "#22c55e",
+      upColor: profit,
+      downColor: loss,
+      borderDownColor: loss,
+      borderUpColor: profit,
+      wickDownColor: loss,
+      wickUpColor: profit,
     });
 
     candleSeries.setData(
@@ -241,7 +254,7 @@ export default function ChartsPage() {
       ohlcv.map((bar) => ({
         time: bar.date,
         value: bar.volume,
-        color: bar.close >= bar.open ? "#22c55e40" : "#ef444440",
+        color: bar.close >= bar.open ? `${profit}40` : `${loss}40`,
       }))
     );
 
@@ -249,8 +262,8 @@ export default function ChartsPage() {
     const smaData = computeSMA(ohlcv, 20);
     if (smaData.length > 0) {
       const smaSeries = chart.addSeries(LineSeries, {
-        color: "#3b82f6",
-        lineWidth: 2,
+        color: primary,
+        lineWidth: 1,
         priceLineVisible: false,
       });
       smaSeries.setData(smaData);
@@ -290,111 +303,144 @@ export default function ChartsPage() {
 
   const timeRanges: TimeRange[] = ["1M", "3M", "6M", "1Y", "2Y", "5Y", "10Y", "ALL"];
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-zinc-100">
-          <LineChartIcon className="size-6 text-blue-400" />
-          Price Charts
-        </h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Interactive candlestick charts with technical indicators
-        </p>
-      </div>
+  const high = ohlcv && ohlcv.length ? Math.max(...ohlcv.map((b) => b.high)) : null;
+  const low = ohlcv && ohlcv.length ? Math.min(...ohlcv.map((b) => b.low)) : null;
+  const avgVol =
+    ohlcv && ohlcv.length
+      ? Math.round(ohlcv.reduce((s, b) => s + b.volume, 0) / ohlcv.length)
+      : null;
 
-      {/* Ticker input */}
-      <Card className="border-zinc-800 bg-zinc-900">
-        <CardContent className="pt-6">
-          <div className="flex gap-3 items-end">
-            <div className="flex-1 max-w-xs">
-              <Input
-                placeholder="Enter ticker (e.g. AAPL)"
-                value={ticker}
-                onChange={(e) => setTicker(e.target.value.toUpperCase())}
-                onKeyDown={(e) => e.key === "Enter" && handleLoad()}
-                className="border-zinc-700 bg-zinc-950 text-zinc-100"
-              />
-            </div>
-            <Button
-              onClick={handleLoad}
-              disabled={loading}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {loading ? (
-                <Loader2 className="mr-2 size-4 animate-spin" />
-              ) : (
-                <Search className="mr-2 size-4" />
-              )}
-              Load
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Market"
+        title="Price charts"
+        description="Candlestick replays with SMA overlay and RSI indicator."
+        actions={
+          <div className="flex items-end gap-2">
+            <Input
+              placeholder="Ticker (e.g. AAPL)"
+              value={ticker}
+              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              onKeyDown={(e) => e.key === "Enter" && handleLoad()}
+              className="w-40 font-mono tabular-nums"
+            />
+            <Button onClick={handleLoad} disabled={loading} size="sm">
+              <Search className="mr-1.5 size-3.5" />
+              {loading ? "Loading…" : "Load"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        }
+      />
 
       {/* Empty state */}
       {!ohlcv && !loading && (
-        <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
-          <LineChartIcon className="mb-3 size-10" />
-          <p>Enter a ticker symbol and click Load to view charts</p>
-        </div>
+        <Card>
+          <CardContent className="py-10">
+            <div className="space-y-3">
+              <Skeleton className="h-8 w-1/4" />
+              <Skeleton className="h-[280px] w-full" />
+              <p className="pt-2 text-center text-xs text-muted-foreground">
+                Enter a ticker symbol and click Load to view charts.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {loading && (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="size-8 animate-spin text-blue-400" />
+        <div className="space-y-3">
+          <Skeleton className="h-9 w-1/3" />
+          <Skeleton className="h-[420px] w-full" />
         </div>
       )}
 
       {/* Chart area */}
       {ohlcv && !loading && (
-        <div className="space-y-4">
-          {/* Price info + timeframe buttons */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <h2 className="text-lg font-semibold text-zinc-100">
+        <div className="flex flex-col gap-5">
+          {/* Headline + KPI row */}
+          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4">
+            <div className="flex items-baseline gap-3">
+              <span className="font-mono text-xl font-semibold tabular-nums text-foreground">
                 {activeTicker}
-              </h2>
+              </span>
               {lastBar && (
-                <span className="text-lg font-mono text-zinc-200">
+                <span className="font-mono text-xl tabular-nums text-foreground">
                   ${lastBar.close.toFixed(2)}
                 </span>
               )}
               {priceChange !== null && priceChangePct !== null && (
-                <Badge
-                  className={
-                    priceChange >= 0
-                      ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-                      : "bg-red-500/15 text-red-400 border-red-500/30"
-                  }
+                <span
+                  className={cn(
+                    "font-mono text-sm tabular-nums",
+                    priceChange >= 0 ? "text-profit" : "text-loss",
+                  )}
                 >
                   {priceChange >= 0 ? "+" : ""}
                   {priceChange.toFixed(2)} ({priceChangePct >= 0 ? "+" : ""}
                   {priceChangePct.toFixed(2)}%)
-                </Badge>
+                </span>
               )}
             </div>
-            <div className="flex gap-1">
-              {timeRanges.map((range) => (
-                <Button
-                  key={range}
-                  variant={timeRange === range ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => handleTimeRange(range)}
-                  className={
-                    timeRange === range
-                      ? "bg-blue-600 hover:bg-blue-700 text-white text-xs"
-                      : "border-zinc-700 bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 text-xs"
-                  }
-                >
-                  {range}
-                </Button>
-              ))}
+            <div className="flex gap-0.5 rounded-md border border-border p-0.5">
+              {timeRanges.map((range) => {
+                const active = timeRange === range;
+                return (
+                  <button
+                    key={range}
+                    onClick={() => handleTimeRange(range)}
+                    className={cn(
+                      "rounded-sm px-2 py-1 font-mono text-[11px] uppercase tracking-wider transition-colors duration-150",
+                      active
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {range}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
+          {/* KPI strip */}
+          {ohlcv.length > 0 && (
+            <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-4">
+              <div className="bg-card p-4">
+                <Stat
+                  label="Last"
+                  value={lastBar ? `$${lastBar.close.toFixed(2)}` : "—"}
+                  trend={priceChange ?? null}
+                  sub={
+                    priceChangePct !== null
+                      ? `${priceChangePct >= 0 ? "+" : ""}${priceChangePct.toFixed(2)}%`
+                      : undefined
+                  }
+                />
+              </div>
+              <div className="bg-card p-4">
+                <Stat
+                  label="Period high"
+                  value={high !== null ? `$${high.toFixed(2)}` : "—"}
+                />
+              </div>
+              <div className="bg-card p-4">
+                <Stat
+                  label="Period low"
+                  value={low !== null ? `$${low.toFixed(2)}` : "—"}
+                />
+              </div>
+              <div className="bg-card p-4">
+                <Stat
+                  label="Avg volume"
+                  value={avgVol !== null ? avgVol.toLocaleString() : "—"}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Candlestick chart */}
-          <Card className="border-zinc-800 bg-zinc-900">
+          <Card>
             <CardContent className="p-2">
               <div ref={chartContainerRef} className="w-full" />
             </CardContent>
@@ -402,23 +448,30 @@ export default function ChartsPage() {
 
           {/* RSI chart */}
           {rsiFiltered.length > 0 && (
-            <Card className="border-zinc-800 bg-zinc-900">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-zinc-300">
-                  RSI (14)
-                </CardTitle>
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>RSI (14)</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="pt-3">
                 <ResponsiveContainer width="100%" height={160}>
-                  <RLineChart data={rsiFiltered}>
+                  <RLineChart
+                    data={rsiFiltered}
+                    margin={{ top: 6, right: 12, left: 0, bottom: 0 }}
+                  >
                     <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="#1f1f23"
+                      strokeDasharray="2 4"
+                      stroke="var(--border)"
+                      vertical={false}
                     />
                     <XAxis
                       dataKey="date"
-                      tick={{ fill: "#71717a", fontSize: 10 }}
-                      axisLine={{ stroke: "#3f3f46" }}
+                      tick={{
+                        fill: "var(--muted-foreground)",
+                        fontSize: 10,
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      axisLine={{ stroke: "var(--border)" }}
+                      tickLine={false}
                       tickFormatter={(v: string) => {
                         const d = new Date(v);
                         return `${d.getMonth() + 1}/${d.getDate()}`;
@@ -427,50 +480,42 @@ export default function ChartsPage() {
                     />
                     <YAxis
                       domain={[0, 100]}
-                      tick={{ fill: "#71717a", fontSize: 10 }}
-                      axisLine={{ stroke: "#3f3f46" }}
+                      tick={{
+                        fill: "var(--muted-foreground)",
+                        fontSize: 10,
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      axisLine={{ stroke: "var(--border)" }}
+                      tickLine={false}
                       ticks={[0, 30, 50, 70, 100]}
                     />
                     <RechartsTooltip
                       contentStyle={{
-                        backgroundColor: "#18181b",
-                        border: "1px solid #3f3f46",
-                        borderRadius: 8,
-                        color: "#e4e4e7",
+                        backgroundColor: "var(--popover)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "0.375rem",
+                        color: "var(--popover-foreground)",
+                        fontSize: 12,
+                        fontFamily: "var(--font-mono)",
                       }}
-                      formatter={(value) => [
-                        Number(value).toFixed(2),
-                        "RSI",
-                      ]}
+                      formatter={(value) => [Number(value).toFixed(2), "RSI"]}
                     />
                     <ReferenceLine
                       y={70}
-                      stroke="#ef4444"
-                      strokeDasharray="4 4"
-                      strokeOpacity={0.6}
-                      label={{
-                        value: "Overbought",
-                        fill: "#ef4444",
-                        fontSize: 10,
-                        position: "right",
-                      }}
+                      stroke="var(--loss)"
+                      strokeDasharray="3 3"
+                      strokeOpacity={0.5}
                     />
                     <ReferenceLine
                       y={30}
-                      stroke="#22c55e"
-                      strokeDasharray="4 4"
-                      strokeOpacity={0.6}
-                      label={{
-                        value: "Oversold",
-                        fill: "#22c55e",
-                        fontSize: 10,
-                        position: "right",
-                      }}
+                      stroke="var(--profit)"
+                      strokeDasharray="3 3"
+                      strokeOpacity={0.5}
                     />
                     <Line
                       type="monotone"
                       dataKey="rsi"
-                      stroke="#a78bfa"
+                      stroke="var(--primary)"
                       strokeWidth={1.5}
                       dot={false}
                     />

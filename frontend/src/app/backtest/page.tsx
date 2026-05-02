@@ -12,11 +12,7 @@ import {
 } from "recharts";
 import {
   Play,
-  Loader2,
   Trash2,
-  FlaskConical,
-  TrendingUp,
-  Calendar,
   Info,
   ChevronDown,
   ChevronUp,
@@ -56,6 +52,9 @@ import {
   TooltipContent,
   TooltipProvider,
 } from "@/components/ui/tooltip";
+import { PageHeader } from "@/components/page-header";
+import { Stat } from "@/components/ui/stat";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useFetch } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import type {
@@ -64,7 +63,7 @@ import type {
   BacktestRequest,
   SignificanceResponse,
 } from "@/lib/api";
-import { Loading, LoadingCard } from "@/components/loading";
+import { cn } from "@/lib/utils";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,7 +92,8 @@ function dateToStr(d: Date | undefined): string {
   return fnsFormat(d, "yyyy-MM-dd");
 }
 
-function strToDate(s: string): Date | undefined {
+// strToDate kept for potential future use
+function _strToDate(s: string): Date | undefined {
   if (!s) return undefined;
   try {
     return parseISO(s);
@@ -101,6 +101,7 @@ function strToDate(s: string): Date | undefined {
     return undefined;
   }
 }
+void _strToDate;
 
 // ── Strategy education content ───────────────────────────────────────────────
 
@@ -159,6 +160,14 @@ const METRIC_TOOLTIPS: Record<string, string> = {
     "The single most profitable trade",
   "Worst Trade":
     "The single most losing trade",
+  "Sortino Ratio":
+    "Downside-risk-adjusted return. Like Sharpe, but only penalizes downside volatility.",
+  "Calmar Ratio":
+    "Annualized return divided by max drawdown. Higher = better return per unit of drawdown.",
+  "Deflated Sharpe":
+    "Sharpe ratio adjusted for the number of trials and non-normality. Closer to truth.",
+  "DD Duration":
+    "Longest stretch of bars spent under a previous equity peak.",
 };
 
 // ── Preset configurations ────────────────────────────────────────────────────
@@ -190,7 +199,7 @@ function InfoTip({ text }: { text: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Info className="inline size-3.5 shrink-0 cursor-help text-zinc-500 hover:text-zinc-300" />
+        <Info className="inline size-3.5 shrink-0 cursor-help text-muted-foreground hover:text-foreground" />
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs">
         {text}
@@ -203,9 +212,11 @@ function InfoTip({ text }: { text: string }) {
 
 function getRiskLevel(sharpe: number, maxDd: number) {
   const absDd = Math.abs(maxDd);
-  if (sharpe > 1.5 && absDd < 10) return { label: "Low Risk", color: "bg-green-500/20 text-green-400" };
-  if (sharpe > 0.5 || absDd < 20) return { label: "Medium Risk", color: "bg-yellow-500/20 text-yellow-400" };
-  return { label: "High Risk", color: "bg-red-500/20 text-red-400" };
+  if (sharpe > 1.5 && absDd < 10)
+    return { label: "Low risk", tone: "profit" as const };
+  if (sharpe > 0.5 || absDd < 20)
+    return { label: "Medium risk", tone: "neutral" as const };
+  return { label: "High risk", tone: "loss" as const };
 }
 
 // ── Benchmark badge ──────────────────────────────────────────────────────────
@@ -219,14 +230,13 @@ function BenchmarkBadge({ result }: { result: BacktestResult }) {
 
   return (
     <Badge
-      variant="secondary"
-      className={
-        beats
-          ? "bg-green-500/20 text-green-400"
-          : "bg-red-500/20 text-red-400"
-      }
+      variant="outline"
+      className={cn(
+        "border-border font-mono text-[10.5px] uppercase tracking-wider",
+        beats ? "text-profit" : "text-loss",
+      )}
     >
-      {beats ? "Beats Buy & Hold \u2713" : "Below Buy & Hold \u2717"} vs S&P 500
+      {beats ? "Beats" : "Below"} buy &amp; hold · S&amp;P 500
     </Badge>
   );
 }
@@ -368,67 +378,151 @@ export default function BacktestPage() {
 
   const eduDescription = STRATEGY_DESCRIPTIONS[selectedStrategy] ?? null;
 
+  // ── KPI configuration ──────────────────────────────────────────────────────
+
+  type StatTone = "profit" | "loss" | "neutral";
+  type StatRow = {
+    label: string;
+    value: string;
+    sub?: string;
+    trend?: number | null;
+    tone?: StatTone;
+  };
+
+  const statRows: StatRow[] = result
+    ? [
+        {
+          label: "Total Return",
+          value: formatPct(result.metrics.total_return_pct),
+          trend: result.metrics.total_return_pct,
+        },
+        {
+          label: "Sharpe Ratio",
+          value: result.metrics.sharpe_ratio.toFixed(2),
+        },
+        {
+          label: "Max Drawdown",
+          value: formatPct(-Math.abs(result.metrics.max_drawdown_pct)),
+          tone: "loss",
+        },
+        {
+          label: "Win Rate",
+          value: `${(result.metrics.win_rate * 100).toFixed(1)}%`,
+        },
+        {
+          label: "Total Trades",
+          value: result.metrics.total_trades.toString(),
+        },
+        {
+          label: "Profit Factor",
+          value: result.metrics.profit_factor.toFixed(2),
+          trend: result.metrics.profit_factor - 1,
+        },
+        {
+          label: "Avg Trade P&L",
+          value: formatCurrency(result.metrics.avg_trade_pnl),
+          trend: result.metrics.avg_trade_pnl,
+        },
+        {
+          label: "Best Trade",
+          value: formatCurrency(result.metrics.best_trade_pnl),
+          tone: "profit",
+        },
+        {
+          label: "Worst Trade",
+          value: formatCurrency(result.metrics.worst_trade_pnl),
+          tone: "loss",
+        },
+        {
+          label: "Sortino Ratio",
+          value: result.metrics.sortino_ratio?.toFixed(2) ?? "—",
+        },
+        {
+          label: "Calmar Ratio",
+          value: result.metrics.calmar_ratio?.toFixed(2) ?? "—",
+        },
+        {
+          label: "Deflated Sharpe",
+          value: result.metrics.deflated_sharpe_ratio?.toFixed(2) ?? "—",
+        },
+        {
+          label: "DD Duration",
+          value:
+            result.metrics.max_drawdown_duration_bars != null
+              ? `${result.metrics.max_drawdown_duration_bars} bars`
+              : "—",
+        },
+      ]
+    : [];
+
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex flex-col gap-6 p-6">
-        <div className="flex items-center gap-3">
-          <FlaskConical className="size-6 text-blue-500" />
-          <h1 className="text-2xl font-bold text-zinc-100">Backtesting</h1>
-        </div>
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          eyebrow="Strategy"
+          title="Backtest"
+          description="Configure a strategy, replay history, and inspect risk-adjusted returns."
+          actions={
+            <Button onClick={handleRun} disabled={running} size="sm">
+              <Play className="mr-1.5 size-3.5" />
+              {running ? "Running…" : "Run backtest"}
+            </Button>
+          }
+        />
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
           {/* Configuration Panel */}
-          <Card className="border-zinc-800 bg-zinc-900">
-            <CardHeader>
-              <CardTitle className="text-zinc-100">Configuration</CardTitle>
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>Configuration</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-4 pt-4">
               {/* Quick Presets */}
               <div className="space-y-2">
-                <Label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-                  Quick Presets
+                <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Quick presets
                 </Label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-3 gap-1.5">
                   {PRESETS.map((p) => (
                     <Button
                       key={p.label}
                       variant="outline"
                       size="sm"
                       onClick={() => applyPreset(p)}
-                      className="border-zinc-700 bg-zinc-950 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+                      className="text-xs"
                     >
-                      <p.icon className="mr-1 size-3.5" />
+                      <p.icon className="mr-1 size-3" />
                       {p.label}
                     </Button>
                   ))}
                 </div>
               </div>
 
-              <Separator className="bg-zinc-800" />
+              <Separator />
 
-              <div className="space-y-2">
-                <Label className="text-zinc-400">Ticker</Label>
+              <div className="space-y-1.5">
+                <Label>Ticker</Label>
                 <Input
                   value={ticker}
                   onChange={(e) => setTicker(e.target.value.toUpperCase())}
                   placeholder="e.g. AAPL"
-                  className="border-zinc-700 bg-zinc-950 font-mono text-zinc-100 placeholder:text-zinc-600"
+                  className="font-mono tabular-nums"
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label className="text-zinc-400">Strategy</Label>
+              <div className="space-y-1.5">
+                <Label>Strategy</Label>
                 {strategiesLoading ? (
-                  <div className="h-8 animate-pulse rounded bg-zinc-800" />
+                  <Skeleton className="h-9 w-full" />
                 ) : (
                   <Select
                     value={selectedStrategy}
                     onValueChange={handleStrategyChange}
                   >
-                    <SelectTrigger className="w-full border-zinc-700 bg-zinc-950 text-zinc-100">
+                    <SelectTrigger className="w-full">
                       <SelectValue placeholder="Select strategy" />
                     </SelectTrigger>
-                    <SelectContent className="border-zinc-700 bg-zinc-900">
+                    <SelectContent>
                       {strategies?.map((s) => (
                         <SelectItem key={s.name} value={s.name}>
                           {s.name}
@@ -438,32 +532,32 @@ export default function BacktestPage() {
                   </Select>
                 )}
                 {currentStrategy && (
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-muted-foreground">
                     {currentStrategy.description}
                   </p>
                 )}
               </div>
 
-              {/* Strategy Education Card */}
+              {/* Strategy Education */}
               {eduDescription && (
-                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                <div className="rounded-md border border-border bg-muted/30 p-3">
                   <button
                     type="button"
                     onClick={() => setEduExpanded(!eduExpanded)}
                     className="flex w-full items-center justify-between text-left"
                   >
-                    <span className="flex items-center gap-2 text-xs font-medium text-blue-400">
+                    <span className="flex items-center gap-2 text-xs font-medium text-foreground">
                       <Info className="size-3.5" />
                       How does this strategy work?
                     </span>
                     {eduExpanded ? (
-                      <ChevronUp className="size-3.5 text-zinc-500" />
+                      <ChevronUp className="size-3.5 text-muted-foreground" />
                     ) : (
-                      <ChevronDown className="size-3.5 text-zinc-500" />
+                      <ChevronDown className="size-3.5 text-muted-foreground" />
                     )}
                   </button>
                   {eduExpanded && (
-                    <p className="mt-2 text-xs leading-relaxed text-zinc-400">
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                       {eduDescription}
                     </p>
                   )}
@@ -474,14 +568,14 @@ export default function BacktestPage() {
               {currentStrategy &&
                 Object.keys(currentStrategy.default_params).length > 0 && (
                   <>
-                    <Separator className="bg-zinc-800" />
-                    <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                    <Separator />
+                    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                       Parameters
                     </p>
                     {Object.entries(currentStrategy.default_params).map(
                       ([key, defaultVal]) => (
                         <div key={key} className="space-y-1">
-                          <Label className="flex items-center gap-1.5 text-xs text-zinc-500">
+                          <Label className="flex items-center gap-1.5 text-xs">
                             {key.replace(/_/g, " ")}
                             {PARAM_TOOLTIPS[key] && (
                               <InfoTip text={PARAM_TOOLTIPS[key]} />
@@ -496,7 +590,7 @@ export default function BacktestPage() {
                                 [key]: parseFloat(e.target.value) || 0,
                               }))
                             }
-                            className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                            className="font-mono tabular-nums"
                           />
                         </div>
                       )
@@ -504,11 +598,11 @@ export default function BacktestPage() {
                   </>
                 )}
 
-              <Separator className="bg-zinc-800" />
+              <Separator />
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label className="text-xs text-zinc-500">Start Date</Label>
+                  <Label className="text-xs">Start date</Label>
                   <DatePicker
                     date={startDate}
                     onDateChange={setStartDate}
@@ -516,7 +610,7 @@ export default function BacktestPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-zinc-500">End Date</Label>
+                  <Label className="text-xs">End date</Label>
                   <DatePicker
                     date={endDate}
                     onDateChange={setEndDate}
@@ -525,22 +619,22 @@ export default function BacktestPage() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label className="text-zinc-400">Initial Capital</Label>
+              <div className="space-y-1.5">
+                <Label>Initial capital</Label>
                 <Input
                   type="number"
                   value={initialCapital}
                   onChange={(e) =>
                     setInitialCapital(parseFloat(e.target.value) || 100000)
                   }
-                  className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                  className="font-mono tabular-nums"
                 />
               </div>
 
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <Label className="text-zinc-400">ATR Stop Multiplier</Label>
-                  <span className="text-xs text-zinc-500">(Optional)</span>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label>ATR stop multiplier</Label>
+                  <span className="text-xs text-muted-foreground">Optional</span>
                 </div>
                 <Input
                   type="number"
@@ -552,9 +646,9 @@ export default function BacktestPage() {
                     setAtrStopMultiplier(val === "" ? undefined : parseFloat(val));
                   }}
                   placeholder="e.g. 2.0"
-                  className="border-zinc-700 bg-zinc-950 text-zinc-100 placeholder:text-zinc-600"
+                  className="font-mono tabular-nums"
                 />
-                <p className="text-xs text-zinc-500 mt-1">
+                <p className="text-xs text-muted-foreground">
                   Dynamic trailing stop based on Average True Range volatility.
                 </p>
               </div>
@@ -562,71 +656,93 @@ export default function BacktestPage() {
               <Button
                 onClick={handleRun}
                 disabled={running}
-                className="w-full bg-blue-600 text-white hover:bg-blue-700"
+                className="w-full"
               >
-                {running ? (
-                  <Loader2 className="mr-2 size-4 animate-spin" />
-                ) : (
-                  <Play className="mr-2 size-4" />
-                )}
-                {running ? "Running\u2026" : "Run Backtest"}
+                <Play className="mr-1.5 size-3.5" />
+                {running ? "Running…" : "Run backtest"}
               </Button>
             </CardContent>
           </Card>
 
           {/* Results Panel */}
-          <Card className="border-zinc-800 bg-zinc-900 lg:col-span-2">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-zinc-100">Results</CardTitle>
+          <Card className="lg:col-span-2">
+            <CardHeader className="flex flex-row items-center justify-between border-b">
+              <CardTitle>Results</CardTitle>
               {result && (
                 <a
                   href={api.backtest.exportCsv(result.id)}
                   download
-                  className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700 transition-colors"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-muted/50"
                 >
                   <Download className="size-3.5" />
                   Export CSV
                 </a>
               )}
             </CardHeader>
-            <CardContent>
+            <CardContent className="pt-4">
               {!result ? (
-                <div className="flex flex-col items-center justify-center py-16 text-zinc-500">
-                  <TrendingUp className="mb-3 size-10" />
-                  <p>Configure and run a backtest to see results</p>
+                <div className="space-y-3 py-2">
+                  <Skeleton className="h-8 w-1/3" />
+                  <Skeleton className="h-[280px] w-full" />
+                  <p className="pt-2 text-center text-xs text-muted-foreground">
+                    Configure and run a backtest to see results.
+                  </p>
                 </div>
               ) : (
                 <Tabs defaultValue="equity">
-                  <TabsList className="border-zinc-700 bg-zinc-800">
-                    <TabsTrigger value="equity">Equity Curve</TabsTrigger>
+                  <TabsList>
+                    <TabsTrigger value="equity">Equity</TabsTrigger>
                     <TabsTrigger value="trades">Trades</TabsTrigger>
                     <TabsTrigger value="metrics">Metrics</TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="equity" className="mt-4">
-                    <div className="h-[350px] w-full">
+                    <div className="h-[320px] w-full">
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={equityCurveData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                        <LineChart
+                          data={equityCurveData}
+                          margin={{ top: 6, right: 6, left: 0, bottom: 0 }}
+                        >
+                          <defs>
+                            <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.18} />
+                              <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid
+                            strokeDasharray="2 4"
+                            stroke="var(--border)"
+                            vertical={false}
+                          />
                           <XAxis
                             dataKey="date"
-                            tick={{ fill: "#71717a", fontSize: 11 }}
-                            axisLine={{ stroke: "#3f3f46" }}
+                            tick={{
+                              fill: "var(--muted-foreground)",
+                              fontSize: 11,
+                              fontFamily: "var(--font-mono)",
+                            }}
+                            axisLine={{ stroke: "var(--border)" }}
                             tickLine={false}
                           />
                           <YAxis
-                            tick={{ fill: "#71717a", fontSize: 11 }}
-                            axisLine={{ stroke: "#3f3f46" }}
+                            tick={{
+                              fill: "var(--muted-foreground)",
+                              fontSize: 11,
+                              fontFamily: "var(--font-mono)",
+                            }}
+                            axisLine={{ stroke: "var(--border)" }}
                             tickLine={false}
                             tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
                             domain={["auto", "auto"]}
                           />
                           <RechartsTooltip
                             contentStyle={{
-                              backgroundColor: "#18181b",
-                              border: "1px solid #3f3f46",
-                              borderRadius: "8px",
-                              color: "#f4f4f5",
+                              backgroundColor: "var(--popover)",
+                              border: "1px solid var(--border)",
+                              borderRadius: "0.375rem",
+                              color: "var(--popover-foreground)",
+                              fontSize: 12,
+                              fontFamily: "var(--font-mono)",
                             }}
                             formatter={(value) => [
                               formatCurrency(Number(value)),
@@ -636,9 +752,10 @@ export default function BacktestPage() {
                           <Line
                             type="monotone"
                             dataKey="value"
-                            stroke="#3b82f6"
-                            strokeWidth={2}
+                            stroke="var(--primary)"
+                            strokeWidth={1.5}
                             dot={false}
+                            fill="url(#equityGrad)"
                           />
                         </LineChart>
                       </ResponsiveContainer>
@@ -647,61 +764,55 @@ export default function BacktestPage() {
 
                   <TabsContent value="trades" className="mt-4">
                     {result.trades.length === 0 ? (
-                      <p className="py-8 text-center text-zinc-500">No trades</p>
+                      <p className="py-8 text-center text-sm text-muted-foreground">
+                        No trades
+                      </p>
                     ) : (
                       <div className="max-h-[400px] overflow-y-auto">
                         <Table>
                           <TableHeader>
-                            <TableRow className="border-zinc-800 hover:bg-transparent">
-                              <TableHead className="text-zinc-400">Date</TableHead>
-                              <TableHead className="text-zinc-400">Side</TableHead>
-                              <TableHead className="text-right text-zinc-400">
-                                Price
-                              </TableHead>
-                              <TableHead className="text-right text-zinc-400">
-                                Qty
-                              </TableHead>
-                              <TableHead className="text-right text-zinc-400">
-                                Value
-                              </TableHead>
-                              <TableHead className="text-right text-zinc-400">
-                                P&L
-                              </TableHead>
+                            <TableRow>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Side</TableHead>
+                              <TableHead className="text-right">Price</TableHead>
+                              <TableHead className="text-right">Qty</TableHead>
+                              <TableHead className="text-right">Value</TableHead>
+                              <TableHead className="text-right">P&amp;L</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {result.trades.map((trade, i) => {
                               const isBuy = trade.side.toUpperCase() === "BUY";
                               return (
-                                <TableRow key={i} className="border-zinc-800">
-                                  <TableCell className="text-zinc-300">
+                                <TableRow key={i}>
+                                  <TableCell className="font-mono tabular-nums text-xs text-muted-foreground">
                                     {new Date(trade.date).toLocaleDateString()}
                                   </TableCell>
                                   <TableCell>
-                                    <Badge
-                                      variant="secondary"
-                                      className={
-                                        isBuy
-                                          ? "bg-green-500/20 text-green-400"
-                                          : "bg-red-500/20 text-red-400"
-                                      }
+                                    <span
+                                      className={cn(
+                                        "font-mono text-[10.5px] uppercase tracking-wider",
+                                        isBuy ? "text-profit" : "text-loss",
+                                      )}
                                     >
                                       {trade.side.toUpperCase()}
-                                    </Badge>
+                                    </span>
                                   </TableCell>
-                                  <TableCell className="text-right font-mono text-zinc-300">
+                                  <TableCell className="text-right font-mono tabular-nums">
                                     {formatCurrency(trade.price)}
                                   </TableCell>
-                                  <TableCell className="text-right text-zinc-300">
+                                  <TableCell className="text-right font-mono tabular-nums">
                                     {trade.quantity}
                                   </TableCell>
-                                  <TableCell className="text-right text-zinc-300">
+                                  <TableCell className="text-right font-mono tabular-nums">
                                     {formatCurrency(trade.value)}
                                   </TableCell>
                                   <TableCell
-                                    className={`text-right font-mono ${
-                                      trade.pnl >= 0 ? "text-green-500" : "text-red-500"
-                                    }`}
+                                    className={cn(
+                                      "text-right font-mono tabular-nums",
+                                      trade.pnl > 0 && "text-profit",
+                                      trade.pnl < 0 && "text-loss",
+                                    )}
                                   >
                                     {trade.pnl !== 0
                                       ? `${trade.pnl >= 0 ? "+" : ""}${formatCurrency(trade.pnl)}`
@@ -721,105 +832,46 @@ export default function BacktestPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <BenchmarkBadge result={result} />
                       {riskLevel && (
-                        <Badge variant="secondary" className={riskLevel.color}>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "border-border font-mono text-[10.5px] uppercase tracking-wider",
+                            riskLevel.tone === "profit" && "text-profit",
+                            riskLevel.tone === "loss" && "text-loss",
+                            riskLevel.tone === "neutral" && "text-muted-foreground",
+                          )}
+                        >
                           {riskLevel.label}
                         </Badge>
                       )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                      {[
-                        {
-                          label: "Total Return",
-                          value: formatPct(result.metrics.total_return_pct),
-                          color:
-                            result.metrics.total_return_pct >= 0
-                              ? "text-green-500"
-                              : "text-red-500",
-                        },
-                        {
-                          label: "Sharpe Ratio",
-                          value: result.metrics.sharpe_ratio.toFixed(2),
-                          color: "text-blue-400",
-                        },
-                        {
-                          label: "Max Drawdown",
-                          value: formatPct(-Math.abs(result.metrics.max_drawdown_pct)),
-                          color: "text-red-400",
-                        },
-                        {
-                          label: "Win Rate",
-                          value: `${(result.metrics.win_rate * 100).toFixed(1)}%`,
-                          color: "text-zinc-100",
-                        },
-                        {
-                          label: "Total Trades",
-                          value: result.metrics.total_trades.toString(),
-                          color: "text-zinc-100",
-                        },
-                        {
-                          label: "Profit Factor",
-                          value: result.metrics.profit_factor.toFixed(2),
-                          color:
-                            result.metrics.profit_factor >= 1
-                              ? "text-green-500"
-                              : "text-red-500",
-                        },
-                        {
-                          label: "Avg Trade P&L",
-                          value: formatCurrency(result.metrics.avg_trade_pnl),
-                          color:
-                            result.metrics.avg_trade_pnl >= 0
-                              ? "text-green-500"
-                              : "text-red-500",
-                        },
-                        {
-                          label: "Best Trade",
-                          value: formatCurrency(result.metrics.best_trade_pnl),
-                          color: "text-green-500",
-                        },
-                        {
-                          label: "Worst Trade",
-                          value: formatCurrency(result.metrics.worst_trade_pnl),
-                          color: "text-red-500",
-                        },
-                        {
-                          label: "Sortino Ratio",
-                          value: result.metrics.sortino_ratio?.toFixed(2) ?? "—",
-                          color: "text-blue-400",
-                        },
-                        {
-                          label: "Calmar Ratio",
-                          value: result.metrics.calmar_ratio?.toFixed(2) ?? "—",
-                          color: "text-blue-400",
-                        },
-                        {
-                          label: "Deflated Sharpe",
-                          value: result.metrics.deflated_sharpe_ratio?.toFixed(2) ?? "—",
-                          color: "text-blue-400",
-                        },
-                        {
-                          label: "DD Duration",
-                          value:
-                            result.metrics.max_drawdown_duration_bars != null
-                              ? `${result.metrics.max_drawdown_duration_bars} bars`
-                              : "—",
-                          color: "text-zinc-100",
-                        },
-                      ].map((m) => (
-                        <div
-                          key={m.label}
-                          className="rounded-lg border border-zinc-800 bg-zinc-950 p-3"
-                        >
-                          <p className="flex items-center gap-1.5 text-xs text-zinc-500">
-                            {m.label}
-                            {METRIC_TOOLTIPS[m.label] && (
+                    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-3 lg:grid-cols-4">
+                      {statRows.map((m) => (
+                        <div key={m.label} className="bg-card p-4">
+                          <Stat
+                            label={m.label}
+                            value={
+                              <span
+                                className={cn(
+                                  m.tone === "profit" && "text-profit",
+                                  m.tone === "loss" && "text-loss",
+                                )}
+                              >
+                                {m.value}
+                              </span>
+                            }
+                            trend={m.trend ?? null}
+                            sub={
+                              METRIC_TOOLTIPS[m.label] ? undefined : undefined
+                            }
+                          />
+                          {METRIC_TOOLTIPS[m.label] && (
+                            <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
                               <InfoTip text={METRIC_TOOLTIPS[m.label]} />
-                            )}
-                          </p>
-                          <p className={`mt-1 text-lg font-semibold ${m.color}`}>
-                            {m.value}
-                          </p>
+                              <span className="truncate">info</span>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -828,19 +880,19 @@ export default function BacktestPage() {
               )}
 
               {result && (
-                <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                <div className="mt-4 rounded-md border border-border bg-muted/20 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="text-sm font-semibold text-zinc-100">
+                      <p className="text-sm font-medium text-foreground">
                         Statistical significance
                       </p>
-                      <p className="text-xs text-zinc-500">
+                      <p className="text-xs text-muted-foreground">
                         Bootstrap CI on Sharpe + permutation test vs. shuffled returns.
                       </p>
                     </div>
                     <Button
                       size="sm"
-                      variant="secondary"
+                      variant="outline"
                       onClick={handleSignificance}
                       disabled={sigRunning}
                     >
@@ -848,33 +900,39 @@ export default function BacktestPage() {
                     </Button>
                   </div>
                   {significance && (
-                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
-                        <p className="text-xs text-zinc-500">Sharpe (point)</p>
-                        <p className="mt-1 text-lg font-semibold text-blue-400">
-                          {significance.bootstrap_ci.point_estimate.toFixed(2)}
-                        </p>
+                    <div className="mt-4 grid grid-cols-1 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-3">
+                      <div className="bg-card p-4">
+                        <Stat
+                          label="Sharpe (point)"
+                          value={significance.bootstrap_ci.point_estimate.toFixed(2)}
+                        />
                       </div>
-                      <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
-                        <p className="text-xs text-zinc-500">
-                          {(significance.bootstrap_ci.confidence * 100).toFixed(0)}% CI
-                        </p>
-                        <p className="mt-1 text-lg font-semibold text-zinc-100">
-                          [{significance.bootstrap_ci.ci_low.toFixed(2)},{" "}
-                          {significance.bootstrap_ci.ci_high.toFixed(2)}]
-                        </p>
+                      <div className="bg-card p-4">
+                        <Stat
+                          label={`${(significance.bootstrap_ci.confidence * 100).toFixed(0)}% CI`}
+                          value={`[${significance.bootstrap_ci.ci_low.toFixed(2)}, ${significance.bootstrap_ci.ci_high.toFixed(2)}]`}
+                        />
                       </div>
-                      <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
-                        <p className="text-xs text-zinc-500">Permutation p-value</p>
-                        <p
-                          className={`mt-1 text-lg font-semibold ${
+                      <div className="bg-card p-4">
+                        <Stat
+                          label="Permutation p-value"
+                          value={
+                            <span
+                              className={
+                                significance.permutation.p_value < 0.05
+                                  ? "text-profit"
+                                  : undefined
+                              }
+                            >
+                              {significance.permutation.p_value.toFixed(3)}
+                            </span>
+                          }
+                          sub={
                             significance.permutation.p_value < 0.05
-                              ? "text-green-500"
-                              : "text-zinc-100"
-                          }`}
-                        >
-                          {significance.permutation.p_value.toFixed(3)}
-                        </p>
+                              ? "Significant at α=0.05"
+                              : "Not significant"
+                          }
+                        />
                       </div>
                     </div>
                   )}
@@ -885,71 +943,69 @@ export default function BacktestPage() {
         </div>
 
         {/* Previous Results */}
-        <Card className="border-zinc-800 bg-zinc-900">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-zinc-100">
-              <Calendar className="size-4" />
-              Previous Runs
-            </CardTitle>
+        <Card>
+          <CardHeader className="border-b">
+            <CardTitle>Previous runs</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-0 pt-0">
             {historyLoading ? (
-              <Loading />
+              <div className="space-y-2 p-4">
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-full" />
+              </div>
             ) : !previousResults || previousResults.length === 0 ? (
-              <p className="py-6 text-center text-sm text-zinc-500">
+              <p className="py-6 text-center text-sm text-muted-foreground">
                 No previous backtests
               </p>
             ) : (
               <Table>
                 <TableHeader>
-                  <TableRow className="border-zinc-800 hover:bg-transparent">
-                    <TableHead className="text-zinc-400">Ticker</TableHead>
-                    <TableHead className="text-zinc-400">Strategy</TableHead>
-                    <TableHead className="text-right text-zinc-400">Return</TableHead>
-                    <TableHead className="text-right text-zinc-400">Sharpe</TableHead>
-                    <TableHead className="text-right text-zinc-400">
-                      Max DD
-                    </TableHead>
-                    <TableHead className="text-right text-zinc-400">Trades</TableHead>
-                    <TableHead className="text-zinc-400">Date</TableHead>
-                    <TableHead className="w-10" />
+                  <TableRow>
+                    <TableHead className="pl-4">Ticker</TableHead>
+                    <TableHead>Strategy</TableHead>
+                    <TableHead className="text-right">Return</TableHead>
+                    <TableHead className="text-right">Sharpe</TableHead>
+                    <TableHead className="text-right">Max DD</TableHead>
+                    <TableHead className="text-right">Trades</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead className="w-10 pr-4" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {previousResults.map((r) => (
                     <TableRow
                       key={r.id}
-                      className="cursor-pointer border-zinc-800 hover:bg-zinc-800/50"
+                      className="cursor-pointer"
                       onClick={() => setResult(r)}
                     >
-                      <TableCell className="font-mono font-semibold text-zinc-100">
+                      <TableCell className="pl-4 font-mono font-medium tabular-nums">
                         {r.ticker}
                       </TableCell>
-                      <TableCell className="text-zinc-400">
+                      <TableCell className="text-muted-foreground">
                         {r.strategy_type}
                       </TableCell>
                       <TableCell
-                        className={`text-right font-mono ${
-                          r.metrics.total_return_pct >= 0
-                            ? "text-green-500"
-                            : "text-red-500"
-                        }`}
+                        className={cn(
+                          "text-right font-mono tabular-nums",
+                          r.metrics.total_return_pct >= 0 ? "text-profit" : "text-loss",
+                        )}
                       >
                         {formatPct(r.metrics.total_return_pct)}
                       </TableCell>
-                      <TableCell className="text-right text-zinc-300">
+                      <TableCell className="text-right font-mono tabular-nums">
                         {r.metrics.sharpe_ratio.toFixed(2)}
                       </TableCell>
-                      <TableCell className="text-right text-red-400">
+                      <TableCell className="text-right font-mono tabular-nums text-loss">
                         {formatPct(-Math.abs(r.metrics.max_drawdown_pct))}
                       </TableCell>
-                      <TableCell className="text-right text-zinc-300">
+                      <TableCell className="text-right font-mono tabular-nums">
                         {r.metrics.total_trades}
                       </TableCell>
-                      <TableCell className="text-xs text-zinc-500">
+                      <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">
                         {new Date(r.created_at).toLocaleDateString()}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="pr-4">
                         <Button
                           variant="ghost"
                           size="icon-sm"
@@ -957,7 +1013,7 @@ export default function BacktestPage() {
                             e.stopPropagation();
                             handleDelete(r.id);
                           }}
-                          className="text-zinc-500 hover:text-red-400"
+                          className="text-muted-foreground hover:text-loss"
                         >
                           <Trash2 className="size-4" />
                         </Button>
