@@ -1,7 +1,7 @@
 import asyncio
 import logging
-from datetime import date
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Union
 
 import yfinance as yf
 
@@ -12,6 +12,15 @@ logger = logging.getLogger(__name__)
 
 
 EXTERNAL_TIMEOUT = 30  # seconds for external API calls
+
+
+def _to_date(value: Union[date, datetime, str]) -> date:
+    """Coerce date|datetime|ISO-string into a date."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return datetime.fromisoformat(str(value)).date()
 
 
 class YahooFinanceProvider(DataProvider):
@@ -34,10 +43,12 @@ class YahooFinanceProvider(DataProvider):
         )
 
     async def get_ohlcv(
-        self, ticker: str, start: date, end: date, interval: str = "1d"
+        self, ticker: str, start, end, interval: str = "1d"
     ) -> list[OHLCVBar]:
+        start_d = _to_date(start)
+        end_d = _to_date(end)
         try:
-            df = await self._fetch_ohlcv(ticker, start, end, interval)
+            df = await self._fetch_ohlcv(ticker, start_d, end_d, interval)
             if df is None or (hasattr(df, "empty") and df.empty):
                 return []
 

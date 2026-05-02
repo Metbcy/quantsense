@@ -86,12 +86,16 @@ def permutation_test_sharpe(
     n_permutations: int = 2_000,
     rng_seed: int | None = 42,
 ) -> PermutationTest:
-    """Permutation test on Sharpe ratio.
+    """Sign-flip permutation test on Sharpe ratio.
 
-    H0: the order of returns is irrelevant (any permutation is equally
-    likely to produce this Sharpe). Under i.i.d. null this is true; if the
-    observed Sharpe is in the right tail, we reject H0 and conclude the
-    strategy's signal carries information beyond the return distribution.
+    H0: returns are noise around zero (symmetric, no edge). Under H0,
+    flipping the sign of each return at random is exchangeable. We
+    compute Sharpe on many sign-flipped copies to build a null
+    distribution and report the right-tail p-value.
+
+    Note: a plain order-permutation of a 1D returns vector leaves both
+    mean and std unchanged, so it cannot test Sharpe at all. Sign-flip
+    is the standard fix when you only have a single return series.
 
     Returns a one-sided p-value (right tail).
     """
@@ -103,8 +107,10 @@ def permutation_test_sharpe(
     observed = sharpe_ratio(returns)
 
     null = np.empty(n_permutations, dtype=np.float64)
+    n = len(returns)
     for i in range(n_permutations):
-        null[i] = sharpe_ratio(rng.permutation(returns))
+        signs = rng.choice([-1.0, 1.0], size=n)
+        null[i] = sharpe_ratio(returns * signs)
 
     # +1 / +1 correction (Phipson-Smyth) to keep p-value > 0
     p = float((np.sum(null >= observed) + 1) / (n_permutations + 1))
