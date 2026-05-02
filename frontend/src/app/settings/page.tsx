@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  Settings as SettingsIcon,
   X,
   Plus,
   Loader2,
@@ -31,6 +30,7 @@ import {
   DialogTrigger,
   DialogClose,
 } from "@/components/ui/dialog";
+import { PageHeader } from "@/components/page-header";
 import { useWatchlist } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import { SettingsSkeleton } from "@/components/loading";
@@ -136,41 +136,52 @@ export default function SettingsPage() {
   if (configLoading) return <SettingsSkeleton />;
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
-      <div className="flex items-center gap-3">
-        <SettingsIcon className="size-6 text-blue-500" />
-        <h1 className="text-2xl font-bold text-zinc-100">Settings</h1>
-      </div>
+    <div className="mx-auto flex max-w-3xl flex-col gap-6">
+      <PageHeader
+        eyebrow="System"
+        title="Settings"
+        description="Manage your watchlist, paper-trading defaults, API credentials, and webhooks."
+        actions={
+          <Button onClick={handleSaveConfig} disabled={saving}>
+            {saving ? (
+              <Loader2 className="mr-1.5 size-4 animate-spin" />
+            ) : (
+              <Save className="mr-1.5 size-4" />
+            )}
+            Save changes
+          </Button>
+        }
+      />
 
       {/* Watchlist Management */}
-      <Card className="border-zinc-800 bg-zinc-900">
-        <CardHeader>
-          <CardTitle className="text-zinc-100">Watchlist</CardTitle>
-          <CardDescription className="text-zinc-500">
-            Manage your tracked tickers
-          </CardDescription>
+      <Card>
+        <CardHeader className="border-b">
+          <CardTitle>Watchlist</CardTitle>
+          <CardDescription>Manage your tracked tickers.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Current watchlist */}
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5">
             {watchlistLoading ? (
-              <div className="h-5 w-32 animate-pulse rounded bg-zinc-800" />
+              <div className="h-5 w-32 animate-pulse rounded-sm bg-muted" />
             ) : watchlist.length === 0 ? (
-              <p className="text-sm text-zinc-500">No tickers in watchlist</p>
+              <p className="text-sm text-muted-foreground">No tickers in watchlist</p>
             ) : (
               watchlist.map((item) => (
                 <Badge
                   key={item.ticker}
                   variant="secondary"
-                  className="gap-1 bg-zinc-800 px-2.5 py-1 text-zinc-200"
+                  className="gap-1 px-1.5 py-0.5"
                 >
                   <span className="font-mono">{item.ticker}</span>
                   {item.name && (
-                    <span className="text-zinc-500">· {item.name}</span>
+                    <span className="font-normal normal-case tracking-normal text-muted-foreground">
+                      · {item.name}
+                    </span>
                   )}
                   <button
                     onClick={() => handleRemoveTicker(item.ticker)}
-                    className="ml-1 rounded-full p-0.5 hover:bg-zinc-700"
+                    className="ml-0.5 rounded-sm p-0.5 transition-colors duration-150 hover:bg-accent"
                   >
                     <X className="size-3" />
                   </button>
@@ -186,12 +197,12 @@ export default function SettingsPage() {
               onChange={(e) => setNewTicker(e.target.value.toUpperCase())}
               onKeyDown={(e) => e.key === "Enter" && handleAddTicker()}
               placeholder="Add ticker (e.g. TSLA)"
-              className="border-zinc-700 bg-zinc-950 font-mono text-zinc-100 placeholder:text-zinc-600"
+              className="font-mono"
             />
             <Button
               onClick={handleAddTicker}
               disabled={addingTicker || !newTicker.trim()}
-              className="shrink-0 bg-blue-600 text-white hover:bg-blue-700"
+              className="shrink-0"
             >
               {addingTicker ? (
                 <Loader2 className="mr-1 size-4 animate-spin" />
@@ -205,55 +216,49 @@ export default function SettingsPage() {
       </Card>
 
       {/* Paper Trading */}
-      <Card className="border-zinc-800 bg-zinc-900">
-        <CardHeader>
-          <CardTitle className="text-zinc-100">Paper Trading</CardTitle>
-          <CardDescription className="text-zinc-500">
-            Configure simulated trading parameters
-          </CardDescription>
+      <Card>
+        <CardHeader className="border-b">
+          <CardTitle>Paper trading</CardTitle>
+          <CardDescription>Configure simulated trading parameters.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label className="text-zinc-400">Initial Cash ($)</Label>
+          <div className="space-y-1.5">
+            <Label htmlFor="initial-cash">Initial cash ($)</Label>
             <Input
+              id="initial-cash"
               type="number"
               value={initialCash}
               onChange={(e) => setInitialCash(e.target.value)}
-              className="border-zinc-700 bg-zinc-950 text-zinc-100"
+              className="font-mono"
             />
           </div>
 
           <Dialog>
             <DialogTrigger asChild>
-              <Button
-                variant="destructive"
-                className="bg-red-500/10 text-red-400 hover:bg-red-500/20"
-              >
-                <RotateCcw className="mr-2 size-4" />
-                Reset Portfolio
+              <Button variant="outline" className="text-loss hover:text-loss">
+                <RotateCcw className="mr-1.5 size-4" />
+                Reset portfolio
               </Button>
             </DialogTrigger>
-            <DialogContent className="border-zinc-700 bg-zinc-900">
+            <DialogContent>
               <DialogHeader>
-                <DialogTitle className="text-zinc-100">Reset Portfolio?</DialogTitle>
-                <DialogDescription className="text-zinc-400">
-                  This will clear all positions, trade history, and reset your
-                  cash balance. This action cannot be undone.
+                <DialogTitle>Reset portfolio?</DialogTitle>
+                <DialogDescription>
+                  This will clear all positions, trade history, and reset your cash
+                  balance. This action cannot be undone.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
                 <DialogClose asChild>
-                  <Button variant="outline" className="border-zinc-700 text-zinc-300">
-                    Cancel
-                  </Button>
+                  <Button variant="outline">Cancel</Button>
                 </DialogClose>
                 <Button
                   onClick={handleReset}
                   disabled={resetting}
-                  className="bg-red-600 text-white hover:bg-red-700"
+                  variant="destructive"
                 >
-                  {resetting && <Loader2 className="mr-2 size-4 animate-spin" />}
-                  Confirm Reset
+                  {resetting && <Loader2 className="mr-1.5 size-4 animate-spin" />}
+                  Confirm reset
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -262,53 +267,52 @@ export default function SettingsPage() {
       </Card>
 
       {/* API Keys */}
-      <Card className="border-zinc-800 bg-zinc-900">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-zinc-100">
-            <Key className="size-4" />
-            API Keys
+      <Card>
+        <CardHeader className="border-b">
+          <CardTitle className="flex items-center gap-1.5">
+            <Key className="size-3.5 text-muted-foreground" strokeWidth={1.75} />
+            API keys
           </CardTitle>
-          <CardDescription className="text-zinc-500">
-            Configure LLM provider credentials for sentiment analysis
+          <CardDescription>
+            Configure LLM provider credentials for sentiment analysis.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {[
             {
-              label: "Groq API Key",
+              id: "groq",
+              label: "Groq API key",
               value: groqKey,
               set: setGroqKey,
               show: showGroq,
               toggle: () => setShowGroq(!showGroq),
             },
             {
-              label: "OpenAI API Key",
+              id: "openai",
+              label: "OpenAI API key",
               value: openaiKey,
               set: setOpenaiKey,
               show: showOpenai,
               toggle: () => setShowOpenai(!showOpenai),
             },
           ].map((field) => (
-            <div key={field.label} className="space-y-1">
-              <Label className="text-zinc-400">{field.label}</Label>
+            <div key={field.id} className="space-y-1.5">
+              <Label htmlFor={field.id}>{field.label}</Label>
               <div className="relative">
                 <Input
+                  id={field.id}
                   type={field.show ? "text" : "password"}
                   value={field.value}
                   onChange={(e) => field.set(e.target.value)}
                   placeholder="sk-..."
-                  className="border-zinc-700 bg-zinc-950 pr-10 font-mono text-zinc-100 placeholder:text-zinc-600"
+                  className="pr-9 font-mono"
                 />
                 <button
                   type="button"
                   onClick={field.toggle}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors duration-150 hover:text-foreground"
                 >
-                  {field.show ? (
-                    <EyeOff className="size-4" />
-                  ) : (
-                    <Eye className="size-4" />
-                  )}
+                  {field.show ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                 </button>
               </div>
             </div>
@@ -317,18 +321,16 @@ export default function SettingsPage() {
       </Card>
 
       {/* Sentiment Settings */}
-      <Card className="border-zinc-800 bg-zinc-900">
-        <CardHeader>
-          <CardTitle className="text-zinc-100">Sentiment Settings</CardTitle>
-          <CardDescription className="text-zinc-500">
-            Configure automated sentiment analysis
-          </CardDescription>
+      <Card>
+        <CardHeader className="border-b">
+          <CardTitle>Sentiment</CardTitle>
+          <CardDescription>Configure automated sentiment analysis.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="space-y-3">
+        <CardContent className="space-y-5">
+          <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <Label className="text-zinc-400">Refresh Interval</Label>
-              <span className="font-mono text-sm text-zinc-300">
+              <Label>Refresh interval</Label>
+              <span className="font-mono text-xs tabular-nums text-foreground">
                 {refreshInterval} min
               </span>
             </div>
@@ -341,70 +343,72 @@ export default function SettingsPage() {
               min={5}
               max={120}
             />
-            <div className="flex justify-between text-[10px] text-zinc-600">
+            <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
               <span>5 min</span>
               <span>120 min</span>
             </div>
           </div>
 
-          <Separator className="bg-zinc-800" />
+          <Separator />
 
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="text-zinc-300">Auto-refresh</Label>
-              <p className="text-xs text-zinc-500">
-                Automatically refresh sentiment data at the interval above
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col gap-0.5">
+              <Label className="normal-case tracking-normal text-foreground" style={{ fontSize: 13, letterSpacing: 0 }}>
+                Auto-refresh
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Automatically refresh sentiment data at the interval above.
               </p>
             </div>
-            <Switch
-              checked={autoRefresh}
-              onCheckedChange={setAutoRefresh}
-            />
+            <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
           </div>
         </CardContent>
       </Card>
 
       {/* TradingView Webhook */}
-      <Card className="border-zinc-800 bg-zinc-900/50">
-        <CardHeader>
-          <CardTitle className="text-zinc-100">TradingView Webhook</CardTitle>
-          <CardDescription className="text-zinc-500">
-            Execute trades directly from TradingView alerts
-          </CardDescription>
+      <Card>
+        <CardHeader className="border-b">
+          <CardTitle>TradingView webhook</CardTitle>
+          <CardDescription>Execute trades directly from TradingView alerts.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-1">
-            <Label className="text-zinc-400">Webhook URL</Label>
-            <div className="rounded-md border border-zinc-800 bg-zinc-950 p-2 font-mono text-[10px] text-blue-400">
-              {typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/tradingview` : '/api/webhooks/tradingview'}
+          <div className="space-y-1.5">
+            <Label>Webhook URL</Label>
+            <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2 font-mono text-[11px] text-primary">
+              {typeof window !== "undefined"
+                ? `${window.location.origin}/api/webhooks/tradingview`
+                : "/api/webhooks/tradingview"}
             </div>
           </div>
 
-          <div className="space-y-1">
-            <Label className="text-zinc-400">Webhook Secret</Label>
+          <div className="space-y-1.5">
+            <Label htmlFor="webhook-secret">Webhook secret</Label>
             <div className="relative">
               <Input
+                id="webhook-secret"
                 type={showWebhook ? "text" : "password"}
                 value={webhookSecret}
                 onChange={(e) => setWebhookSecret(e.target.value)}
                 placeholder="Enter a secure secret"
-                className="border-zinc-700 bg-zinc-950 pr-10 font-mono text-zinc-100"
+                className="pr-9 font-mono"
               />
               <button
                 type="button"
                 onClick={() => setShowWebhook(!showWebhook)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors duration-150 hover:text-foreground"
               >
-                {showWebhook ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                {showWebhook ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
               </button>
             </div>
           </div>
 
-          <div className="rounded-lg bg-blue-500/5 p-3 border border-blue-500/10">
-            <p className="text-[10px] font-medium text-blue-400 uppercase tracking-wider mb-2">Message Template (JSON)</p>
-            <pre className="text-[10px] text-zinc-400 overflow-x-auto">
+          <div className="rounded-md border border-border bg-muted/30 p-3">
+            <p className="mb-2 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+              Message template (JSON)
+            </p>
+            <pre className="overflow-x-auto font-mono text-[11px] leading-relaxed text-foreground">
 {`{
-  "secret": "${webhookSecret || 'YOUR_SECRET'}",
+  "secret": "${webhookSecret ? "••••••••" : "YOUR_SECRET"}",
   "ticker": "{{ticker}}",
   "action": "buy",
   "quantity": 10
@@ -414,19 +418,15 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Save Button */}
-      <div className="flex justify-end pb-6">
-        <Button
-          onClick={handleSaveConfig}
-          disabled={saving}
-          className="bg-blue-600 px-8 text-white hover:bg-blue-700"
-        >
+      {/* Bottom save */}
+      <div className="flex justify-end pb-2">
+        <Button onClick={handleSaveConfig} disabled={saving}>
           {saving ? (
-            <Loader2 className="mr-2 size-4 animate-spin" />
+            <Loader2 className="mr-1.5 size-4 animate-spin" />
           ) : (
-            <Save className="mr-2 size-4" />
+            <Save className="mr-1.5 size-4" />
           )}
-          Save All Settings
+          Save all settings
         </Button>
       </div>
     </div>
