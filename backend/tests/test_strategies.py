@@ -1,7 +1,7 @@
 import pytest
 from datetime import date
 from data.provider import OHLCVBar
-from engine.strategy import MomentumStrategy, MeanReversionStrategy, SentimentMomentumStrategy, VolumeMomentumStrategy, SignalType
+from engine.strategy import MomentumStrategy, MeanReversionStrategy, VolumeMomentumStrategy, SignalType
 
 def create_bars(prices: list[float]) -> list[OHLCVBar]:
     return [
@@ -42,21 +42,6 @@ def test_mean_reversion_strategy():
     strat = MeanReversionStrategy({"rsi_period": 5, "oversold": 30, "overbought": 70})
     signals = strat.generate_signals(bars)
     assert signals[-1].type == SignalType.BUY
-
-def test_sentiment_momentum_strategy():
-    # SMA(3) crossover buy signal at index 3
-    prices = [30, 30, 30, 40, 50]
-    bars = create_bars(prices)
-    
-    # Positive sentiment -> BUY should remain BUY
-    strat = SentimentMomentumStrategy({"sma_period": 3, "sentiment_weight": 0.5})
-    signals_pos = strat.generate_signals(bars, sentiment_scores=[0.0, 0.0, 0.0, 0.8, 0.8])
-    assert signals_pos[3].type == SignalType.BUY
-    
-    # Negative sentiment -> BUY should be suppressed to HOLD
-    signals_neg = strat.generate_signals(bars, sentiment_scores=[0.0, 0.0, 0.0, -0.5, -0.5])
-    assert signals_neg[3].type == SignalType.HOLD
-    assert "suppressed" in signals_neg[3].reason
 
 def test_volume_momentum_strategy():
     prices = [30, 30, 30, 40, 50]

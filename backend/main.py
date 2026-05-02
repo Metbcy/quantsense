@@ -19,8 +19,6 @@ from api.trading import router as trading_router
 from api.market import router as market_router
 from api.settings import router as settings_router
 from api.websocket import router as ws_router
-from api.auto_trade import router as auto_trade_router
-from api.webhooks import router as webhooks_router
 from api.portfolio_history import router as portfolio_history_router
 
 logger = logging.getLogger(__name__)
@@ -82,11 +80,6 @@ async def lifespan(app: FastAPI):
     setup_logging()
     init_db()
     logger.info("QuantSense API started")
-    if settings.WEBHOOK_SECRET == "quantsense_secret_123":
-        logger.warning(
-            "WEBHOOK_SECRET is using the default placeholder — "
-            "set a secure value via the WEBHOOK_SECRET env var"
-        )
     # Start background sentiment scheduler
     from sentiment.scheduler import start_scheduler, stop_scheduler
     start_scheduler()
@@ -99,8 +92,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="QuantSense API",
-    description="AI-powered quantitative trading platform",
-    version="1.0.0",
+    description="A research-grade equity backtesting and signal platform",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -184,8 +177,6 @@ app.include_router(market_router, prefix="/api/market", tags=["market"])
 app.include_router(backtest_router, prefix="/api/backtest", tags=["backtest"])
 app.include_router(sentiment_router, prefix="/api/sentiment", tags=["sentiment"])
 app.include_router(trading_router, prefix="/api/trading", tags=["trading"])
-app.include_router(auto_trade_router, prefix="/api/auto-trade", tags=["auto-trade"])
-app.include_router(webhooks_router, prefix="/api/webhooks", tags=["webhooks"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(ws_router, prefix="/api/ws", tags=["websocket"])
 app.include_router(portfolio_history_router, prefix="/api/portfolio", tags=["portfolio"])
