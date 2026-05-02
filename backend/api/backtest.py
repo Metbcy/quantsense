@@ -137,9 +137,14 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
     return _format_result(db_result, req.strategy_type, result.equity_curve, result.metrics)
 
 
-@router.post("/optimize", response_model=OptimizationResponse)
-async def optimize_strategy(req: OptimizeRequest):
-    """Search for the best strategy parameters."""
+@router.post("/optimize")
+async def optimize_strategy(req: OptimizeRequest) -> dict:
+    """Walk-forward parameter optimization.
+
+    Returns the walk-forward result shape (see engine.walk_forward.to_dict):
+    n_windows, oos_sharpe_avg, oos_sharpe_std, is_vs_oos_degradation_pct,
+    and per-window detail.
+    """
     # 1. Fetch historical data
     bars = await provider.get_ohlcv(req.ticker, req.start_date, req.end_date)
     if not bars:

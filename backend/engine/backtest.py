@@ -1,6 +1,6 @@
 """Backtest runner — bar-event-driven simulator with realistic execution.
 
-Key design points (interview-defensible):
+Key design points:
 
   * **No look-ahead bias**: a signal generated using bars[0..t] executes at
     bars[t+1].open. The legacy "signal at close, fill at same close" model

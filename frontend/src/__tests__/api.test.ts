@@ -53,8 +53,7 @@ describe("API client structure", () => {
     expect(api.trading.portfolio).toBeTypeOf("function");
     expect(api.settings).toBeDefined();
     expect(api.settings.watchlist).toBeTypeOf("function");
-    expect(api.autoTrade).toBeDefined();
-    expect(api.autoTrade.run).toBeTypeOf("function");
+    expect(api.backtest.significance).toBeTypeOf("function");
   });
 });
 

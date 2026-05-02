@@ -2,7 +2,7 @@
 
 The previous version was a single-pass grid search over the full sample,
 which (a) overstates performance and (b) is exactly the trap quant
-interviewers test for. This module now wraps the walk-forward engine.
+real-world deployment exposes. This module now wraps the walk-forward engine.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Quant-grade performance metrics.
 
-Goes beyond textbook Sharpe to provide the metrics interviewers actually probe:
+Goes beyond textbook Sharpe to provide the metrics that matter in practice:
   * Sortino ratio (downside-only volatility)
   * Calmar ratio (return / max DD)
   * Max drawdown depth AND duration (in bars)
@@ -126,7 +126,7 @@ def alpha_beta(
 ) -> tuple[float, float]:
     """Annualized alpha (%) and beta vs benchmark via OLS on excess returns.
 
-    Risk-free rate assumed 0 for simplicity (interview-defensible).
+    Risk-free rate assumed 0 for simplicity.
     """
     n = min(len(strategy_returns), len(benchmark_returns))
     if n < 5:

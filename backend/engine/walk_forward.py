@@ -14,7 +14,7 @@ Anchored walk-forward:
   * Aggregate IS vs OOS Sharpe. Big gap = overfit.
 
 This is the standard "honest" backtest pattern in quant research and is
-defensible in an interview ("how did you avoid overfitting?").
+honest about overfitting risk.
 """
 
 from __future__ import annotations

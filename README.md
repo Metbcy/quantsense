@@ -2,7 +2,7 @@
 
 **A research-grade equity backtesting and signal platform.**
 
-QuantSense is a single-repo full-stack app for designing equity strategies, backtesting them with realistic execution assumptions, and stress-testing the results with statistically defensible methods.
+QuantSense is a single-repo full-stack app for designing equity strategies, backtesting them with realistic execution assumptions, and stress-testing the results with standard statistical methods.
 
 This is not a "paper-trade-with-AI-and-pretty-charts" demo. The focus is on the things a quant researcher actually cares about: **no look-ahead bias, realistic costs, walk-forward validation, and significance testing** that distinguishes signal from luck.
 
@@ -36,7 +36,7 @@ Next.js + Tailwind. Backtest builder, equity-curve charts, trade table, walk-for
 
 ---
 
-## Design choices worth defending
+## Design choices
 
 | Choice                                | Why                                                                                                                                    |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
