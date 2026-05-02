@@ -158,67 +158,6 @@ class MeanReversionStrategy(Strategy):
 
 
 # ---------------------------------------------------------------------------
-# Sentiment-Momentum Strategy
-# ---------------------------------------------------------------------------
-
-class SentimentMomentumStrategy(Strategy):
-    @property
-    def name(self) -> str:
-        return "sentiment_momentum"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Combines SMA-crossover momentum with sentiment scores.  "
-            "Suppresses buys when sentiment is strongly bearish."
-        )
-
-    def default_params(self) -> dict:
-        return {"sma_period": 20, "sentiment_weight": 0.3}
-
-    def generate_signals(
-        self,
-        bars: list[OHLCVBar],
-        sentiment_scores: list[float] | None = None,
-    ) -> list[Signal]:
-        base_strategy = MomentumStrategy({"sma_period": self.params["sma_period"]})
-        base_signals = base_strategy.generate_signals(bars)
-        weight = self.params["sentiment_weight"]
-
-        signals: list[Signal] = []
-        for i, sig in enumerate(base_signals):
-            sentiment = (
-                sentiment_scores[i]
-                if sentiment_scores is not None and i < len(sentiment_scores)
-                else 0.0
-            )
-
-            if sig.type == SignalType.BUY:
-                if sentiment <= -0.2:
-                    signals.append(
-                        Signal(SignalType.HOLD, 0.0, f"BUY suppressed – sentiment={sentiment:.2f}")
-                    )
-                else:
-                    adjusted = max(0.0, min(sig.strength * (1 + sentiment * weight), 1.0))
-                    signals.append(
-                        Signal(
-                            SignalType.BUY,
-                            adjusted,
-                            f"{sig.reason}; sentiment={sentiment:.2f}",
-                        )
-                    )
-            elif sig.type == SignalType.SELL:
-                adjusted = max(0.0, min(sig.strength * (1 + (-sentiment) * weight), 1.0))
-                signals.append(
-                    Signal(SignalType.SELL, adjusted, f"{sig.reason}; sentiment={sentiment:.2f}")
-                )
-            else:
-                signals.append(sig)
-
-        return signals
-
-
-# ---------------------------------------------------------------------------
 # Bollinger Band Strategy
 # ---------------------------------------------------------------------------
 
@@ -403,7 +342,6 @@ class VolumeMomentumStrategy(Strategy):
 STRATEGY_REGISTRY: dict[str, type[Strategy]] = {
     "momentum": MomentumStrategy,
     "mean_reversion": MeanReversionStrategy,
-    "sentiment_momentum": SentimentMomentumStrategy,
     "volume_momentum": VolumeMomentumStrategy,
     "bollinger_bands": BollingerBandStrategy,
     "macd": MACDStrategy,

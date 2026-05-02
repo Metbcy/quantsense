@@ -1,13 +1,21 @@
-import logging
-import optuna
-from datetime import date
-from typing import Dict, Any
+"""Strategy parameter optimization — walk-forward only.
 
-from .backtest import run_backtest, BacktestConfig
-from .strategy import STRATEGY_REGISTRY
+The previous version was a single-pass grid search over the full sample,
+which (a) overstates performance and (b) is exactly the trap quant
+real-world deployment exposes. This module now wraps the walk-forward engine.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import date
+
 from data.provider import OHLCVBar
 
+from .walk_forward import run_walk_forward, to_dict as wf_to_dict
+
 logger = logging.getLogger(__name__)
+
 
 def run_strategy_optimization(
     ticker: str,
@@ -16,76 +24,23 @@ def run_strategy_optimization(
     start_date: date,
     end_date: date,
     param_ranges: dict,
-    initial_capital: float = 100000.0,
-    n_trials: int = 50,
-    metric: str = "sharpe_ratio"
+    initial_capital: float = 100_000.0,
+    n_trials: int = 50,  # legacy arg; mapped to n_windows when small
+    metric: str = "sharpe_ratio",
 ) -> dict:
+    """Walk-forward grid optimization.
+
+    Maps the legacy `n_trials` arg to a sensible `n_windows` (default 5).
+    Returns a JSON-friendly dict shaped for the walk-forward UI panel.
     """
-    Optimizes strategy parameters using Optuna.
-    """
-    strategy_cls = STRATEGY_REGISTRY.get(strategy_type)
-    if not strategy_cls:
-        raise ValueError(f"Strategy {strategy_type} not found")
-
-    trials_data = []
-
-    def objective(trial: optuna.Trial):
-        # 1. Suggest parameters based on ranges
-        params = {}
-        for p_name, p_range in param_ranges.items():
-            if p_range["type"] == "int":
-                params[p_name] = trial.suggest_int(p_name, int(p_range["min"]), int(p_range["max"]), step=int(p_range.get("step") or 1))
-            elif p_range["type"] == "float":
-                params[p_name] = trial.suggest_float(p_name, float(p_range["min"]), float(p_range["max"]), step=float(p_range.get("step") or 0.1))
-            elif p_range["type"] == "categorical":
-                params[p_name] = trial.suggest_categorical(p_name, p_range["options"])
-
-        # 2. Run backtest
-        strategy = strategy_cls(params)
-        config = BacktestConfig(
-            ticker=ticker,
-            strategy=strategy,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=initial_capital
-        )
-        
-        try:
-            result = run_backtest(config, bars)
-            metrics = result.metrics
-            
-            # Record trial
-            trials_data.append({
-                "trial_id": trial.number,
-                "params": params,
-                "metrics": {
-                    "total_return_pct": metrics.total_return_pct,
-                    "sharpe_ratio": metrics.sharpe_ratio,
-                    "win_rate": metrics.win_rate,
-                    "max_drawdown_pct": metrics.max_drawdown_pct,
-                    "profit_factor": metrics.profit_factor,
-                    "final_value": metrics.final_value
-                }
-            })
-
-            # Return value to optimize (Optuna minimizes by default, but we'll use study.optimize(direction="maximize"))
-            if metric == "sharpe_ratio":
-                return metrics.sharpe_ratio
-            elif metric == "total_return_pct":
-                return metrics.total_return_pct
-            elif metric == "win_rate":
-                return metrics.win_rate
-            return metrics.sharpe_ratio
-        except Exception as e:
-            logger.error(f"Trial {trial.number} failed: {e}")
-            return -9999.0
-
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=n_trials)
-
-    return {
-        "best_params": study.best_params,
-        "best_value": study.best_value,
-        "metric": metric,
-        "trials": trials_data
-    }
+    n_windows = 5 if n_trials >= 5 else max(2, n_trials)
+    result = run_walk_forward(
+        ticker=ticker,
+        strategy_type=strategy_type,
+        bars=bars,
+        param_ranges=param_ranges,
+        n_windows=n_windows,
+        initial_capital=initial_capital,
+        metric=metric,
+    )
+    return wf_to_dict(result)

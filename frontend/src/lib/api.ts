@@ -71,6 +71,77 @@ export interface BacktestMetrics {
   best_trade_pnl: number;
   worst_trade_pnl: number;
   profit_factor: number;
+  // Quant-grade extras (added by backend `quant_extras` block; optional for back-compat)
+  sortino_ratio?: number;
+  calmar_ratio?: number;
+  annualized_return_pct?: number;
+  max_drawdown_duration_bars?: number;
+  downside_deviation?: number;
+  deflated_sharpe_ratio?: number;
+}
+
+// ── Significance test ─────────────────────────────────────────────
+export interface SignificanceRequest {
+  ticker: string;
+  strategy_type: string;
+  params?: Record<string, number>;
+  start_date: string;
+  end_date: string;
+  initial_capital?: number;
+}
+
+export interface BootstrapCI {
+  point_estimate: number;
+  ci_low: number;
+  ci_high: number;
+  confidence: number;
+  n_resamples: number;
+}
+
+export interface PermutationTest {
+  observed_sharpe: number;
+  p_value: number;
+  null_mean: number;
+  null_std: number;
+  n_permutations: number;
+}
+
+export interface SignificanceResponse {
+  ticker: string;
+  strategy_type: string;
+  n_observations: number;
+  bootstrap_ci: BootstrapCI;
+  permutation: PermutationTest;
+}
+
+// ── Walk-forward (returned from /backtest/optimize) ───────────────
+export interface WalkForwardWindow {
+  window_id: number;
+  train_start: string;
+  train_end: string;
+  test_start: string;
+  test_end: string;
+  best_params: Record<string, number>;
+  is_sharpe: number;
+  oos_sharpe: number;
+  oos_return_pct: number;
+  oos_max_drawdown_pct: number;
+  oos_trades: number;
+}
+
+export interface WalkForwardResult {
+  ticker: string;
+  strategy_type: string;
+  metric: string;
+  n_windows: number;
+  train_bars: number;
+  test_bars: number;
+  oos_sharpe_avg: number;
+  oos_sharpe_std: number;
+  oos_return_avg_pct: number;
+  is_sharpe_avg: number;
+  is_vs_oos_degradation_pct: number;
+  windows: WalkForwardWindow[];
 }
 
 export interface BacktestTrade {
@@ -204,58 +275,6 @@ export interface OptimizeRequest {
   metric?: 'sharpe_ratio' | 'total_return_pct' | 'win_rate';
 }
 
-export interface OptimizationTrial {
-  trial_id: number;
-  params: Record<string, any>;
-  metrics: {
-    total_return_pct: number;
-    sharpe_ratio: number;
-    win_rate: number;
-    max_drawdown_pct: number;
-    profit_factor: number;
-    final_value: number;
-  };
-}
-
-export interface OptimizationResponse {
-  best_params: Record<string, any>;
-  best_value: number;
-  metric: string;
-  trials: OptimizationTrial[];
-}
-
-export interface AutoTradeDecision {
-  ticker: string;
-  action: string;
-  quantity: number;
-  price: number;
-  confidence: number;
-  reasons: string[];
-}
-
-export interface AutoTradeExecution {
-  ticker: string;
-  action: string;
-  status: string;
-  filled_price?: number;
-  quantity?: number;
-  confidence?: number;
-  reasons: string[];
-}
-
-export interface AutoTradeResult {
-  timestamp: string;
-  decisions: AutoTradeDecision[];
-  executions: AutoTradeExecution[];
-  portfolio: {
-    total_value: number;
-    cash: number;
-    positions_count: number;
-    total_pnl: number;
-    total_pnl_pct: number;
-  };
-}
-
 export interface CompareResult {
   strategy_name: string;
   strategy_type: string;
@@ -284,53 +303,6 @@ export interface ChartIndicators {
   rsi: (number | null)[];
   bollinger_upper: (number | null)[];
   bollinger_lower: (number | null)[];
-}
-
-export interface SchedulerStatus {
-  running: boolean;
-  interval_minutes: number;
-  next_run: string | null;
-  last_run: string | null;
-  total_cycles: number;
-  cycle_history: {
-    cycle: number;
-    timestamp: string;
-    tickers_count?: number;
-    decisions?: number;
-    executions?: number;
-    portfolio_value?: number;
-    status: string;
-  }[];
-}
-
-export interface RebalanceResult {
-  rebalance_actions: string[];
-  before: Record<string, number>;
-  after: Record<string, number>;
-  portfolio: {
-    total_value: number;
-    cash: number;
-    positions_count: number;
-    total_pnl: number;
-    total_pnl_pct: number;
-  };
-  error?: string;
-}
-
-export interface AutoTradeAnalysis {
-  analyses: {
-    ticker: string;
-    price?: number;
-    sentiment_score?: number;
-    rsi?: number | null;
-    sma_20?: number | null;
-    macd_histogram?: number | null;
-    weekly_trend?: string;
-    bollinger_squeeze?: boolean;
-    signal: string;
-    confidence: number;
-    reasons: string[];
-  }[];
 }
 
 // ── Fetch helper ──────────────────────────────────────────────────────────────
@@ -451,7 +423,12 @@ export const api = {
         body: JSON.stringify(data),
       }),
     optimize: (data: OptimizeRequest) =>
-      fetchJson<OptimizationResponse>('/backtest/optimize', {
+      fetchJson<WalkForwardResult>('/backtest/optimize', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    significance: (data: SignificanceRequest) =>
+      fetchJson<SignificanceResponse>('/backtest/significance', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
@@ -513,24 +490,6 @@ export const api = {
       }),
   },
 
-  autoTrade: {
-    run: () => fetchJson<AutoTradeResult>('/auto-trade/run', { method: 'POST' }),
-    analyze: () => fetchJson<AutoTradeAnalysis>('/auto-trade/analyze', { method: 'POST' }),
-    schedulerStart: (intervalMinutes?: number) =>
-      fetchJson<SchedulerStatus>('/auto-trade/scheduler/start', {
-        method: 'POST',
-        body: JSON.stringify({ interval_minutes: intervalMinutes ?? null }),
-      }),
-    schedulerStop: () =>
-      fetchJson<SchedulerStatus>('/auto-trade/scheduler/stop', { method: 'POST' }),
-    schedulerStatus: () =>
-      fetchJson<SchedulerStatus>('/auto-trade/scheduler/status'),
-    rebalance: (thresholdPct?: number) =>
-      fetchJson<RebalanceResult>(
-        `/auto-trade/rebalance${thresholdPct != null ? `?threshold_pct=${thresholdPct}` : ''}`,
-        { method: 'POST' }
-      ),
-  },
 };
 
 // ── WebSocket helper ──────────────────────────────────────────────────────────

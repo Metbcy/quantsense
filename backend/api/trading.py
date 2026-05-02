@@ -16,8 +16,6 @@ from models.pydantic_models import OrderRequest
 from models.schemas import Portfolio as PortfolioDB, Position as PositionDB, PortfolioSnapshot, Trade as TradeDB, User
 from trading.broker import Broker, Order, OrderSide, OrderStatus, OrderType
 from trading.paper_broker import PaperBroker
-from trading.alpaca_broker import AlpacaBroker
-from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,24 +23,15 @@ router = APIRouter()
 
 _provider = _provider_instance
 _paper_broker: PaperBroker | None = None
-_alpaca_broker: AlpacaBroker | None = None
 _paper_broker_loaded = False
 
 
 def _get_active_broker(db: Session) -> Broker:
-    """Returns AlpacaBroker if configured, otherwise PaperBroker."""
-    global _alpaca_broker, _paper_broker, _paper_broker_loaded
-    
-    if settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
-        if _alpaca_broker is None:
-            _alpaca_broker = AlpacaBroker()
-        if _alpaca_broker.is_available:
-            return _alpaca_broker
-
+    """Returns the persisted PaperBroker. Live trading removed by design."""
+    global _paper_broker, _paper_broker_loaded
     if not _paper_broker_loaded:
         _paper_broker = _load_broker_from_db(db)
         _paper_broker_loaded = True
-    
     return _paper_broker
 
 
@@ -327,9 +316,6 @@ async def get_trade_history(
     """Get trade history (paginated)."""
     broker = _get_active_broker(db)
 
-    if isinstance(broker, AlpacaBroker):
-        return await broker.get_trade_history()
-
     page = max(1, page)
     page_size = min(max(1, page_size), 200)
     offset = (page - 1) * page_size
@@ -372,11 +358,7 @@ async def reset_broker(
 ):
     """Reset paper broker to initial state and clear DB. No-op for live brokers."""
     global _paper_broker, _paper_broker_loaded
-    broker = _get_active_broker(db)
-    
-    if isinstance(broker, AlpacaBroker):
-        raise HTTPException(status_code=400, detail="Cannot reset a live Alpaca broker via this endpoint.")
-
+    _get_active_broker(db)
     portfolio = _get_or_create_portfolio(db, user)
 
     # Clear DB records

@@ -12,6 +12,11 @@ from sqlalchemy.orm import Session
 from data.shared import provider
 from engine.backtest import BacktestConfig, run_backtest
 from engine.optimizer import run_strategy_optimization
+from engine.significance import (
+    bootstrap_sharpe_ci,
+    permutation_test_sharpe,
+    returns_from_equity,
+)
 from engine.strategy import STRATEGY_REGISTRY
 from models.database import get_db
 from models.pydantic_models import (
@@ -88,19 +93,26 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
     db.add(db_strategy)
     db.flush()
 
+    # Trade-level stats (computed from trades, not metrics object)
+    sell_pnls = [t.pnl for t in result.trades if t.side == "sell"]
+    win_rate = (len([p for p in sell_pnls if p > 0]) / len(sell_pnls) * 100.0) if sell_pnls else 0.0
+    total_trades = len(sell_pnls)
+    initial_capital = result.config.initial_capital
+    final_value = result.equity_curve[-1][1] if result.equity_curve else initial_capital
+
     # 5. Save backtest result
     db_result = BacktestResultModel(
         strategy_id=db_strategy.id,
         ticker=req.ticker,
         start_date=req.start_date,
         end_date=req.end_date,
-        initial_capital=result.metrics.initial_capital,
-        final_value=result.metrics.final_value,
+        initial_capital=initial_capital,
+        final_value=final_value,
         total_return_pct=result.metrics.total_return_pct,
         sharpe_ratio=result.metrics.sharpe_ratio,
         max_drawdown_pct=result.metrics.max_drawdown_pct,
-        win_rate=result.metrics.win_rate,
-        total_trades=result.metrics.total_trades,
+        win_rate=win_rate,
+        total_trades=total_trades,
     )
     db.add(db_result)
     db.flush()
@@ -125,9 +137,14 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
     return _format_result(db_result, req.strategy_type, result.equity_curve, result.metrics)
 
 
-@router.post("/optimize", response_model=OptimizationResponse)
-async def optimize_strategy(req: OptimizeRequest):
-    """Search for the best strategy parameters."""
+@router.post("/optimize")
+async def optimize_strategy(req: OptimizeRequest) -> dict:
+    """Walk-forward parameter optimization.
+
+    Returns the walk-forward result shape (see engine.walk_forward.to_dict):
+    n_windows, oos_sharpe_avg, oos_sharpe_std, is_vs_oos_degradation_pct,
+    and per-window detail.
+    """
     # 1. Fetch historical data
     bars = await provider.get_ohlcv(req.ticker, req.start_date, req.end_date)
     if not bars:
@@ -187,10 +204,23 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None, metric
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else (999.0 if gross_profit > 0 else 0)
 
     if metrics_obj:
-        avg_pnl = metrics_obj.avg_trade_pnl
-        best_pnl = metrics_obj.best_trade_pnl
-        worst_pnl = metrics_obj.worst_trade_pnl
-        profit_factor = metrics_obj.profit_factor
+        # New PerformanceMetrics doesn't carry trade-level stats; trade-derived
+        # numbers above remain authoritative.
+        pass
+
+    # Pull rich quant metrics from the engine result if available.
+    quant_extras: dict = {}
+    if metrics_obj is not None:
+        quant_extras = {
+            "annualized_return_pct": getattr(metrics_obj, "annualized_return_pct", None),
+            "sortino_ratio": getattr(metrics_obj, "sortino_ratio", None),
+            "calmar_ratio": getattr(metrics_obj, "calmar_ratio", None),
+            "max_drawdown_duration_bars": getattr(metrics_obj, "max_drawdown_duration_bars", None),
+            "downside_deviation": getattr(metrics_obj, "downside_deviation", None),
+            "alpha": getattr(metrics_obj, "alpha", None),
+            "beta": getattr(metrics_obj, "beta", None),
+            "deflated_sharpe_ratio": getattr(metrics_obj, "deflated_sharpe_ratio", None),
+        }
 
     return {
         "id": db_result.id,
@@ -211,6 +241,7 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None, metric
             "best_trade_pnl": best_pnl,
             "worst_trade_pnl": worst_pnl,
             "profit_factor": profit_factor,
+            **quant_extras,
         },
         "trades": trades,
         "equity_curve": [
@@ -385,3 +416,81 @@ async def export_result(result_id: int, format: str = "csv", db: Session = Depen
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Statistical significance
+# ---------------------------------------------------------------------------
+@router.post("/significance")
+async def significance(req: BacktestRequest):
+    """Run a backtest, then test whether its Sharpe is statistically real.
+
+    Two outputs:
+      * `bootstrap_ci`: 95% CI on Sharpe via i.i.d. bootstrap (n=2000)
+      * `permutation`: one-sided p-value vs random shuffles of the same
+        return distribution (n=2000)
+
+    A bootstrap CI that comfortably excludes 0, *and* a permutation
+    p-value < 0.05, together suggest the strategy is doing more than
+    riding the underlying return distribution.
+    """
+    import numpy as np
+
+    strategy_cls = STRATEGY_REGISTRY.get(req.strategy_type)
+    if strategy_cls is None:
+        raise HTTPException(status_code=400, detail=f"Unknown strategy '{req.strategy_type}'")
+
+    bars = await provider.get_ohlcv(req.ticker, req.start_date, req.end_date)
+    if not bars:
+        raise HTTPException(status_code=400, detail=f"No OHLCV data for {req.ticker}")
+
+    strategy = strategy_cls(req.params)
+    config = BacktestConfig(
+        ticker=req.ticker,
+        strategy=strategy,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        initial_capital=req.initial_capital,
+    )
+    result = run_backtest(config, bars)
+
+    equity = np.array([v for _, v in result.equity_curve], dtype=np.float64)
+    rets = returns_from_equity(equity)
+    if len(rets) < 5:
+        raise HTTPException(status_code=400, detail="Backtest produced too few return observations")
+
+    boot = bootstrap_sharpe_ci(rets)
+    perm = permutation_test_sharpe(rets)
+
+    return {
+        "ticker": req.ticker,
+        "strategy_type": req.strategy_type,
+        "n_observations": int(len(rets)),
+        "bootstrap_ci": {
+            "point_estimate": boot.point_estimate,
+            "ci_low": boot.ci_low,
+            "ci_high": boot.ci_high,
+            "confidence": boot.confidence,
+            "n_resamples": boot.n_resamples,
+        },
+        "permutation": {
+            "observed_sharpe": perm.observed_sharpe,
+            "p_value": perm.p_value,
+            "null_mean": perm.null_mean,
+            "null_std": perm.null_std,
+            "n_permutations": perm.n_permutations,
+        },
+        "interpretation": _interpret(boot, perm),
+    }
+
+
+def _interpret(boot, perm) -> str:
+    sig = perm.p_value < 0.05
+    pos = boot.ci_low > 0
+    if sig and pos:
+        return "Sharpe is positive with 95% confidence and significantly different from random shuffles (p<0.05). Signal is plausibly real."
+    if sig and not pos:
+        return "Significant per permutation test but bootstrap CI includes zero — interpret with caution."
+    if pos and not sig:
+        return "Bootstrap CI is positive but permutation p-value is not significant — Sharpe may reflect distributional luck."
+    return "Insufficient evidence: CI includes zero and permutation p-value is not significant. Strategy is not distinguishable from chance on this sample."

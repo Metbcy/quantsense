@@ -62,6 +62,7 @@ import type {
   StrategyInfo,
   BacktestResult,
   BacktestRequest,
+  SignificanceResponse,
 } from "@/lib/api";
 import { Loading, LoadingCard } from "@/components/loading";
 
@@ -254,6 +255,8 @@ export default function BacktestPage() {
   const [atrStopMultiplier, setAtrStopMultiplier] = useState<number | undefined>();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
+  const [significance, setSignificance] = useState<SignificanceResponse | null>(null);
+  const [sigRunning, setSigRunning] = useState(false);
   const [eduExpanded, setEduExpanded] = useState(false);
 
   // Set default strategy when strategies load
@@ -306,12 +309,34 @@ export default function BacktestPage() {
       };
       const res = await api.backtest.run(req);
       setResult(res);
+      setSignificance(null);
       refetchHistory();
       toast.success("Backtest completed");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Backtest failed");
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function handleSignificance() {
+    if (!ticker.trim() || !selectedStrategy) return;
+    setSigRunning(true);
+    try {
+      const res = await api.backtest.significance({
+        ticker: ticker.toUpperCase(),
+        strategy_type: selectedStrategy,
+        start_date: dateToStr(startDate),
+        end_date: dateToStr(endDate),
+        initial_capital: initialCapital,
+        params,
+      });
+      setSignificance(res);
+      toast.success("Significance test complete");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Significance test failed");
+    } finally {
+      setSigRunning(false);
     }
   }
 
@@ -758,6 +783,29 @@ export default function BacktestPage() {
                           value: formatCurrency(result.metrics.worst_trade_pnl),
                           color: "text-red-500",
                         },
+                        {
+                          label: "Sortino Ratio",
+                          value: result.metrics.sortino_ratio?.toFixed(2) ?? "—",
+                          color: "text-blue-400",
+                        },
+                        {
+                          label: "Calmar Ratio",
+                          value: result.metrics.calmar_ratio?.toFixed(2) ?? "—",
+                          color: "text-blue-400",
+                        },
+                        {
+                          label: "Deflated Sharpe",
+                          value: result.metrics.deflated_sharpe_ratio?.toFixed(2) ?? "—",
+                          color: "text-blue-400",
+                        },
+                        {
+                          label: "DD Duration",
+                          value:
+                            result.metrics.max_drawdown_duration_bars != null
+                              ? `${result.metrics.max_drawdown_duration_bars} bars`
+                              : "—",
+                          color: "text-zinc-100",
+                        },
                       ].map((m) => (
                         <div
                           key={m.label}
@@ -777,6 +825,60 @@ export default function BacktestPage() {
                     </div>
                   </TabsContent>
                 </Tabs>
+              )}
+
+              {result && (
+                <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-zinc-100">
+                        Statistical significance
+                      </p>
+                      <p className="text-xs text-zinc-500">
+                        Bootstrap CI on Sharpe + permutation test vs. shuffled returns.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={handleSignificance}
+                      disabled={sigRunning}
+                    >
+                      {sigRunning ? "Running…" : "Run test"}
+                    </Button>
+                  </div>
+                  {significance && (
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
+                        <p className="text-xs text-zinc-500">Sharpe (point)</p>
+                        <p className="mt-1 text-lg font-semibold text-blue-400">
+                          {significance.bootstrap_ci.point_estimate.toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
+                        <p className="text-xs text-zinc-500">
+                          {(significance.bootstrap_ci.confidence * 100).toFixed(0)}% CI
+                        </p>
+                        <p className="mt-1 text-lg font-semibold text-zinc-100">
+                          [{significance.bootstrap_ci.ci_low.toFixed(2)},{" "}
+                          {significance.bootstrap_ci.ci_high.toFixed(2)}]
+                        </p>
+                      </div>
+                      <div className="rounded border border-zinc-800 bg-zinc-900 p-3">
+                        <p className="text-xs text-zinc-500">Permutation p-value</p>
+                        <p
+                          className={`mt-1 text-lg font-semibold ${
+                            significance.permutation.p_value < 0.05
+                              ? "text-green-500"
+                              : "text-zinc-100"
+                          }`}
+                        >
+                          {significance.permutation.p_value.toFixed(3)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </CardContent>
           </Card>
