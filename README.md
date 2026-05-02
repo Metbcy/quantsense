@@ -18,6 +18,7 @@ This is not a "paper-trade-with-AI-and-pretty-charts" demo. The focus is on the 
 - **`strategy.py`** — momentum, mean reversion, Bollinger bands, MACD, volume momentum.
 - **`indicators.py`** — SMA, EMA, RSI, MACD, Bollinger bands, ATR.
 - **`optimizer.py`** — thin wrapper that delegates to walk-forward (the old single-pass grid search was an overfitting machine and was removed).
+- **`screener.py`** — parallel ticker screener used by `/api/market/screener`; orthogonal to the backtest engine.
 
 ### API (`backend/api/`)
 FastAPI; SQLite (default) or any SQLAlchemy-compatible DB.
@@ -30,6 +31,11 @@ FastAPI; SQLite (default) or any SQLAlchemy-compatible DB.
 - `GET  /api/sentiment/analyze/{ticker}` — VADER sentiment over recent news headlines (research only; not used for signal generation)
 - `GET  /api/market/...` — OHLCV, quotes, search, screener
 - `POST /api/trading/order` — paper-trading positions tracker (educational, not a live broker)
+
+Supporting surfaces (dashboard scaffolding, not part of the research API):
+`/api/auth/*` for login, `/api/settings/*` for watchlist/preferences,
+`/api/portfolio/history` for equity-curve snapshots, `/api/ws` for live
+quote streaming.
 
 ### Frontend (`frontend/`)
 Next.js + Tailwind. Backtest builder, equity-curve charts, trade table, walk-forward results view, significance panel.
