@@ -9,18 +9,22 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
+  ReferenceLine,
 } from "recharts";
-import { Search, Loader2, Newspaper, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
+import { PageHeader } from "@/components/page-header";
+import { Stat } from "@/components/ui/stat";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { useFetch } from "@/lib/hooks";
 import type { SentimentResult } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -32,16 +36,22 @@ function timeAgo(dateStr: string) {
   return `${days}d ago`;
 }
 
-function scoreColor(score: number) {
-  if (score > 0.15) return "text-green-500";
-  if (score < -0.15) return "text-red-500";
-  return "text-zinc-400";
+function scoreClass(score: number) {
+  if (score > 0.15) return "text-profit";
+  if (score < -0.15) return "text-loss";
+  return "text-muted-foreground";
 }
 
 function scoreDot(score: number) {
-  if (score > 0.15) return "bg-green-500";
-  if (score < -0.15) return "bg-red-500";
-  return "bg-zinc-500";
+  if (score > 0.15) return "bg-profit";
+  if (score < -0.15) return "bg-loss";
+  return "bg-muted-foreground/60";
+}
+
+function sentimentLabel(score: number) {
+  if (score > 0.15) return "Bullish";
+  if (score < -0.15) return "Bearish";
+  return "Neutral";
 }
 
 function SentimentGauge({ score }: { score: number }) {
@@ -50,30 +60,26 @@ function SentimentGauge({ score }: { score: number }) {
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs text-zinc-500">
+      <div className="flex items-baseline justify-between text-[11px] uppercase tracking-wider text-muted-foreground">
         <span>Bearish</span>
-        <span className="text-lg font-bold text-zinc-100">
+        <span
+          className={cn(
+            "font-mono text-2xl tabular-nums normal-case tracking-normal",
+            scoreClass(score),
+          )}
+        >
           {score >= 0 ? "+" : ""}
           {score.toFixed(3)}
         </span>
         <span>Bullish</span>
       </div>
-      <div className="relative h-4 w-full overflow-hidden rounded-full">
-        {/* Gradient background */}
+      <div className="relative h-1.5 w-full overflow-hidden rounded-sm border border-border bg-muted">
         <div
-          className="absolute inset-0"
-          style={{
-            background:
-              "linear-gradient(to right, #ef4444, #f59e0b, #eab308, #22c55e)",
-          }}
-        />
-        {/* Marker */}
-        <div
-          className="absolute top-0 h-full w-1 -translate-x-1/2 rounded-sm bg-white shadow-[0_0_6px_rgba(255,255,255,0.8)]"
+          className="absolute top-0 h-full w-px -translate-x-1/2 bg-foreground"
           style={{ left: `${pct}%` }}
         />
       </div>
-      <div className="flex justify-between text-[10px] text-zinc-600">
+      <div className="flex justify-between font-mono text-[10px] tabular-nums text-muted-foreground">
         <span>-1.0</span>
         <span>0</span>
         <span>+1.0</span>
@@ -129,156 +135,161 @@ export default function SentimentPage() {
 
   const trendIcon =
     result?.trend === "improving" ? (
-      <TrendingUp className="size-4" />
+      <TrendingUp className="size-3.5" />
     ) : result?.trend === "declining" ? (
-      <TrendingDown className="size-4" />
+      <TrendingDown className="size-3.5" />
     ) : (
-      <Minus className="size-4" />
+      <Minus className="size-3.5" />
     );
 
-  const trendColor =
+  const trendClass =
     result?.trend === "improving"
-      ? "bg-green-500/20 text-green-400"
+      ? "text-profit border-profit/40"
       : result?.trend === "declining"
-        ? "bg-red-500/20 text-red-400"
-        : "bg-zinc-700 text-zinc-300";
+        ? "text-loss border-loss/40"
+        : "text-muted-foreground border-border";
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div className="flex items-center gap-3">
-        <Newspaper className="size-6 text-blue-500" />
-        <h1 className="text-2xl font-bold text-zinc-100">Sentiment Analysis</h1>
-      </div>
-
-      {/* Search Bar */}
-      <Card className="border-zinc-800 bg-zinc-900">
-        <CardContent className="pt-6">
-          <div className="flex gap-3">
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Market"
+        title="Sentiment analysis"
+        description="Aggregated news scoring with VADER + LLM, plus historical trend."
+        actions={
+          <div className="flex items-end gap-2">
             <Input
               value={ticker}
               onChange={(e) => setTicker(e.target.value.toUpperCase())}
               onKeyDown={(e) => e.key === "Enter" && handleAnalyze()}
-              placeholder="Enter ticker (e.g. AAPL)"
-              className="border-zinc-700 bg-zinc-950 font-mono text-zinc-100 placeholder:text-zinc-600"
+              placeholder="Ticker (e.g. AAPL)"
+              className="w-40 font-mono tabular-nums"
             />
-            <Button
-              onClick={handleAnalyze}
-              disabled={analyzing}
-              className="shrink-0 bg-blue-600 text-white hover:bg-blue-700"
-            >
-              {analyzing ? (
-                <Loader2 className="mr-2 size-4 animate-spin" />
-              ) : (
-                <Search className="mr-2 size-4" />
-              )}
-              Analyze
+            <Button onClick={handleAnalyze} disabled={analyzing} size="sm">
+              <Search className="mr-1.5 size-3.5" />
+              {analyzing ? "Analyzing…" : "Analyze"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        }
+      />
 
       {!result ? (
-        <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
-          <Search className="mb-3 size-10" />
-          <p>Enter a ticker to analyze market sentiment</p>
-          <p className="mt-1 text-xs text-zinc-600">
-            We aggregate news from multiple sources and score sentiment
-          </p>
-        </div>
+        <Card>
+          <CardContent className="py-10">
+            <div className="space-y-3">
+              <Skeleton className="h-6 w-1/3" />
+              <Skeleton className="h-32 w-full" />
+              <p className="pt-2 text-center text-xs text-muted-foreground">
+                Enter a ticker to analyze market sentiment.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       ) : (
         <>
           {/* Sentiment Overview */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <Card className="border-zinc-800 bg-zinc-900 lg:col-span-2">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2 text-zinc-100">
-                    <span className="font-mono text-blue-400">{result.ticker}</span>
-                    Sentiment
-                  </CardTitle>
-                  <Badge variant="secondary" className={trendColor}>
-                    {trendIcon}
-                    <span className="ml-1 capitalize">{result.trend}</span>
-                  </Badge>
-                </div>
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardHeader className="flex flex-row items-center justify-between border-b">
+                <CardTitle className="flex items-baseline gap-2">
+                  <span className="font-mono tabular-nums text-foreground">
+                    {result.ticker}
+                  </span>
+                  <span className="text-muted-foreground">sentiment</span>
+                </CardTitle>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "font-mono text-[10.5px] uppercase tracking-wider",
+                    trendClass,
+                  )}
+                >
+                  {trendIcon}
+                  <span className="ml-1">{result.trend}</span>
+                </Badge>
               </CardHeader>
-              <CardContent className="space-y-6">
+              <CardContent className="space-y-5 pt-4">
                 <SentimentGauge score={result.overall_score} />
 
-                <Separator className="bg-zinc-800" />
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-                    <p className="text-xs text-zinc-500">VADER Average</p>
-                    <p className={`mt-1 text-xl font-bold ${scoreColor(result.vader_avg)}`}>
-                      {result.vader_avg.toFixed(3)}
-                    </p>
+                <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border">
+                  <div className="bg-card p-3">
+                    <Stat
+                      label="VADER average"
+                      value={
+                        <span className={scoreClass(result.vader_avg)}>
+                          {result.vader_avg.toFixed(3)}
+                        </span>
+                      }
+                    />
                   </div>
-                  <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-                    <p className="text-xs text-zinc-500">LLM Score</p>
-                    <p
-                      className={`mt-1 text-xl font-bold ${
-                        result.llm_score !== null
-                          ? scoreColor(result.llm_score)
-                          : "text-zinc-500"
-                      }`}
-                    >
-                      {result.llm_score !== null ? result.llm_score.toFixed(3) : "N/A"}
-                    </p>
+                  <div className="bg-card p-3">
+                    <Stat
+                      label="LLM score"
+                      value={
+                        result.llm_score !== null ? (
+                          <span className={scoreClass(result.llm_score)}>
+                            {result.llm_score.toFixed(3)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">N/A</span>
+                        )
+                      }
+                    />
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4 text-xs text-zinc-500">
-                  <span>{result.num_sources} sources analyzed</span>
+                <div className="flex items-center gap-4 font-mono text-[11px] tabular-nums text-muted-foreground">
+                  <span>{result.num_sources} sources</span>
+                  <span>·</span>
                   <span>Updated {timeAgo(result.updated_at)}</span>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Score Summary Card */}
-            <Card className="border-zinc-800 bg-zinc-900">
-              <CardHeader>
-                <CardTitle className="text-zinc-100">Score Summary</CardTitle>
+            {/* Score Summary */}
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Summary</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="text-center">
+              <CardContent className="space-y-4 pt-4">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    Overall score
+                  </p>
                   <p
-                    className={`text-5xl font-black ${scoreColor(result.overall_score)}`}
+                    className={cn(
+                      "mt-1 font-mono text-4xl font-medium tabular-nums",
+                      scoreClass(result.overall_score),
+                    )}
                   >
                     {result.overall_score >= 0 ? "+" : ""}
                     {result.overall_score.toFixed(2)}
                   </p>
-                  <p className="mt-2 text-sm text-zinc-500">Overall Score</p>
                 </div>
 
-                <Separator className="bg-zinc-800" />
-
-                <div className="space-y-3">
+                <div className="space-y-2 border-t border-border pt-3 text-sm">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-400">Sentiment</span>
-                    <span className={`font-semibold ${scoreColor(result.overall_score)}`}>
-                      {result.overall_score > 0.15
-                        ? "Bullish"
-                        : result.overall_score < -0.15
-                          ? "Bearish"
-                          : "Neutral"}
+                    <span className="text-muted-foreground">Sentiment</span>
+                    <span
+                      className={cn("font-medium", scoreClass(result.overall_score))}
+                    >
+                      {sentimentLabel(result.overall_score)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-400">Trend</span>
-                    <span className={`capitalize font-semibold ${
-                      result.trend === "improving"
-                        ? "text-green-500"
-                        : result.trend === "declining"
-                          ? "text-red-500"
-                          : "text-zinc-300"
-                    }`}>
+                    <span className="text-muted-foreground">Trend</span>
+                    <span
+                      className={cn(
+                        "font-medium capitalize",
+                        result.trend === "improving" && "text-profit",
+                        result.trend === "declining" && "text-loss",
+                      )}
+                    >
                       {result.trend}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-400">Sources</span>
-                    <span className="font-semibold text-zinc-100">
+                    <span className="text-muted-foreground">Sources</span>
+                    <span className="font-mono tabular-nums text-foreground">
                       {result.num_sources}
                     </span>
                   </div>
@@ -288,47 +299,47 @@ export default function SentimentPage() {
           </div>
 
           {/* News Feed */}
-          <Card className="border-zinc-800 bg-zinc-900">
-            <CardHeader>
-              <CardTitle className="text-zinc-100">Headlines</CardTitle>
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>Headlines</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="pt-2">
               {result.headlines.length === 0 ? (
-                <p className="py-8 text-center text-sm text-zinc-500">
+                <p className="py-8 text-center text-sm text-muted-foreground">
                   No headlines available
                 </p>
               ) : (
                 <ScrollArea className="h-[400px]">
-                  <div className="space-y-1">
+                  <div className="divide-y divide-border">
                     {result.headlines.map((item, i) => (
                       <a
                         key={i}
                         href={item.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-zinc-800/60"
+                        className="flex items-start gap-3 px-2 py-3 transition-colors hover:bg-muted/40"
                       >
                         <div
-                          className={`mt-1.5 size-2 shrink-0 rounded-full ${scoreDot(item.score)}`}
+                          className={cn(
+                            "mt-1.5 size-2 shrink-0 rounded-full",
+                            scoreDot(item.score),
+                          )}
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm leading-snug text-zinc-200">
+                          <p className="text-sm leading-snug text-foreground">
                             {item.headline}
                           </p>
-                          <div className="mt-1 flex items-center gap-2">
-                            <Badge
-                              variant="outline"
-                              className="border-zinc-700 text-[10px] text-zinc-500"
-                            >
-                              {item.source}
-                            </Badge>
-                            <span className="text-[10px] text-zinc-600">
-                              {timeAgo(item.published_at)}
-                            </span>
+                          <div className="mt-1 flex items-center gap-2 font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                            <span>{item.source}</span>
+                            <span>·</span>
+                            <span>{timeAgo(item.published_at)}</span>
                           </div>
                         </div>
                         <span
-                          className={`shrink-0 font-mono text-xs font-medium ${scoreColor(item.score)}`}
+                          className={cn(
+                            "shrink-0 font-mono text-xs tabular-nums",
+                            scoreClass(item.score),
+                          )}
                         >
                           {item.score >= 0 ? "+" : ""}
                           {item.score.toFixed(2)}
@@ -342,65 +353,71 @@ export default function SentimentPage() {
           </Card>
 
           {/* History Chart */}
-          <Card className="border-zinc-800 bg-zinc-900">
-            <CardHeader>
-              <CardTitle className="text-zinc-100">
-                Sentiment History —{" "}
-                <span className="font-mono text-blue-400">{result.ticker}</span>
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>
+                Sentiment history ·{" "}
+                <span className="font-mono tabular-nums">{result.ticker}</span>
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="pt-3">
               {historyLoading ? (
-                <div className="flex h-[250px] items-center justify-center">
-                  <Loader2 className="size-6 animate-spin text-zinc-500" />
-                </div>
+                <Skeleton className="h-[250px] w-full" />
               ) : chartData.length === 0 ? (
-                <p className="py-12 text-center text-sm text-zinc-500">
+                <p className="py-12 text-center text-sm text-muted-foreground">
                   No historical data available
                 </p>
               ) : (
                 <div className="h-[250px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <LineChart
+                      data={chartData}
+                      margin={{ top: 6, right: 12, left: 0, bottom: 0 }}
+                    >
+                      <CartesianGrid
+                        strokeDasharray="2 4"
+                        stroke="var(--border)"
+                        vertical={false}
+                      />
                       <XAxis
                         dataKey="date"
-                        tick={{ fill: "#71717a", fontSize: 11 }}
-                        axisLine={{ stroke: "#3f3f46" }}
+                        tick={{
+                          fill: "var(--muted-foreground)",
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                        }}
+                        axisLine={{ stroke: "var(--border)" }}
                         tickLine={false}
                       />
                       <YAxis
                         domain={[-1, 1]}
                         ticks={[-1, -0.5, 0, 0.5, 1]}
-                        tick={{ fill: "#71717a", fontSize: 11 }}
-                        axisLine={{ stroke: "#3f3f46" }}
+                        tick={{
+                          fill: "var(--muted-foreground)",
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                        }}
+                        axisLine={{ stroke: "var(--border)" }}
                         tickLine={false}
                       />
                       <Tooltip
                         contentStyle={{
-                          backgroundColor: "#18181b",
-                          border: "1px solid #3f3f46",
-                          borderRadius: "8px",
-                          color: "#f4f4f5",
+                          backgroundColor: "var(--popover)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "0.375rem",
+                          color: "var(--popover-foreground)",
+                          fontSize: 12,
+                          fontFamily: "var(--font-mono)",
                         }}
-                        formatter={(value) => [
-                          Number(value).toFixed(3),
-                          "Score",
-                        ]}
+                        formatter={(value) => [Number(value).toFixed(3), "Score"]}
                       />
-                      {/* Zero line reference */}
-                      <CartesianGrid
-                        horizontal={false}
-                        vertical={false}
-                        strokeDasharray="0"
-                        stroke="#3f3f46"
-                      />
+                      <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
                       <Line
                         type="monotone"
                         dataKey="score"
-                        stroke="#3b82f6"
-                        strokeWidth={2}
-                        dot={{ fill: "#3b82f6", r: 3 }}
+                        stroke="var(--primary)"
+                        strokeWidth={1.5}
+                        dot={false}
                       />
                     </LineChart>
                   </ResponsiveContainer>
