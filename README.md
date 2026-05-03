@@ -111,13 +111,23 @@ curl -X POST http://localhost:8000/api/backtest/significance \
   }'
 ```
 
-Returns a Sharpe point estimate, a 95% bootstrap CI, and a permutation-test p-value, with a one-line interpretation.
+Returns a Sharpe point estimate, a 95% bootstrap CI **and a stationary-block-bootstrap CI** (autocorrelation-corrected), a permutation-test p-value, and a one-line interpretation. Same config request → byte-identical CIs forever (every result includes a `run_hash`; the bootstrap RNG seed is derived from it).
 
 ---
 
 ## Roadmap
 
-- Block-bootstrap CI for autocorrelated returns
 - Multi-asset portfolio backtester with rebalancing
 - White's Reality Check / SPA test for strategy comparison
-- Alpha/beta computed against a configurable benchmark series
+- Factor risk decomposition (Fama-French 3- and 5-factor regression of strategy returns)
+- Parquet OHLCV cache via pyarrow
+
+## Recently shipped (2026-05-02 rigor follow-up pass)
+
+- **Vectorized backtester.** Engine now walks trade-by-trade with array-level no-look-ahead contracts (entry triggers built from `np.minimum.accumulate` over `pending = sig_type[:-1]`); golden-output regression test asserts byte-identical fills/PnL/equity/metrics vs the previous loop on all 5 strategies.
+- **Validated against `empyrical`.** New `tests/test_metrics_vs_empyrical.py` runs Sharpe, Sortino, Calmar, max-DD, downside-deviation, alpha, and beta against the canonical Quantopian-derived reference. 5/7 match exactly; Sortino and alpha match modulo two documented design choices (divisor convention, linear vs compound annualization), each captured as an exact mathematical identity.
+- **`statsmodels` for alpha/beta.** Hand-rolled OLS replaced with `statsmodels.OLS().fit(cov_type='HC1')`. The metrics dict now exposes `alpha_t`, `alpha_pvalue`, `beta_t`, `beta_pvalue`, `r_squared`, `n_obs` — what an interview reviewer expects to see, not just point estimates.
+- **Stationary block bootstrap.** `arch.bootstrap.StationaryBootstrap` with the Politis-White optimal block length tuner. The significance endpoint reports both i.i.d. and block CIs side-by-side; the spread is the autocorrelation correction.
+- **Reproducibility contract.** Every backtest result carries a `run_hash = sha256(price_data | params | code_version)`. The bootstrap / block-bootstrap / permutation seeds derive from the hash, so the same config produces byte-identical CIs and p-values forever. Param-grid iteration sorted; `np.random.Generator` everywhere (no global `np.random.seed()`); `dataclasses.asdict` falls back to `__dict__` for non-dataclass fields. New `tests/test_reproducibility.py` proves it.
+
+Tests: **116 passing** (was 50 before this pass).

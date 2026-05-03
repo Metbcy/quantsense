@@ -17,6 +17,7 @@ from engine.metrics import (
     sortino_ratio,
 )
 from engine.significance import (
+    bootstrap_sharpe_block,
     bootstrap_sharpe_ci,
     permutation_test_sharpe,
     returns_from_equity,
@@ -72,6 +73,56 @@ def test_bootstrap_ci_brackets_point_estimate():
     rets = np.random.default_rng(7).normal(0.001, 0.01, 252)
     ci = bootstrap_sharpe_ci(rets, n_resamples=500)
     assert ci.ci_low <= ci.point_estimate <= ci.ci_high
+
+
+def test_block_bootstrap_ci_brackets_point_estimate():
+    rets = np.random.default_rng(7).normal(0.001, 0.01, 252)
+    ci = bootstrap_sharpe_block(rets, n_resamples=500)
+    assert ci.ci_low <= ci.point_estimate <= ci.ci_high
+    assert ci.avg_block_length >= 1.0
+    assert ci.n_resamples == 500
+    assert ci.confidence == 0.95
+
+
+def test_block_bootstrap_wider_for_autocorrelated_returns():
+    """On strongly autocorrelated returns the block bootstrap should
+    produce a noticeably wider CI than the i.i.d. bootstrap, because the
+    i.i.d. version under-states the variance of the Sharpe estimator.
+
+    We construct an AR(1) series with phi=0.4 — well within the regime
+    where Politis-White picks a block length > 1.
+    """
+    rng = np.random.default_rng(123)
+    n = 500
+    phi = 0.4
+    eps = rng.normal(0.0005, 0.01, n)
+    rets = np.empty(n)
+    rets[0] = eps[0]
+    for i in range(1, n):
+        rets[i] = phi * rets[i - 1] + eps[i]
+
+    iid = bootstrap_sharpe_ci(rets, n_resamples=1000)
+    block = bootstrap_sharpe_block(rets, n_resamples=1000)
+
+    iid_width = iid.ci_high - iid.ci_low
+    block_width = block.ci_high - block.ci_low
+    assert block_width > iid_width, (
+        f"Expected block CI wider than i.i.d. CI for AR(1) returns; "
+        f"got iid={iid_width:.4f}, block={block_width:.4f}"
+    )
+    # Politis-White should pick a block length materially > 1 here
+    assert block.avg_block_length > 1.5
+
+
+def test_block_bootstrap_explicit_block_length():
+    rets = np.random.default_rng(1).normal(0.001, 0.01, 200)
+    ci = bootstrap_sharpe_block(rets, n_resamples=200, block_length=10.0)
+    assert ci.avg_block_length == 10.0
+
+
+def test_block_bootstrap_too_few_observations():
+    with pytest.raises(ValueError):
+        bootstrap_sharpe_block(np.array([0.01, -0.01]))
 
 
 def test_permutation_test_random_returns_high_pvalue():

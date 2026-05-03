@@ -887,7 +887,7 @@ export default function BacktestPage() {
                         Statistical significance
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Bootstrap CI on Sharpe + permutation test vs. shuffled returns.
+                        Sharpe CI under both i.i.d. and stationary block bootstrap (autocorrelation-aware), plus a sign-flip permutation test.
                       </p>
                     </div>
                     <Button
@@ -899,43 +899,72 @@ export default function BacktestPage() {
                       {sigRunning ? "Running…" : "Run test"}
                     </Button>
                   </div>
-                  {significance && (
-                    <div className="mt-4 grid grid-cols-1 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-3">
-                      <div className="bg-card p-4">
-                        <Stat
-                          label="Sharpe (point)"
-                          value={significance.bootstrap_ci.point_estimate.toFixed(2)}
-                        />
-                      </div>
-                      <div className="bg-card p-4">
-                        <Stat
-                          label={`${(significance.bootstrap_ci.confidence * 100).toFixed(0)}% CI`}
-                          value={`[${significance.bootstrap_ci.ci_low.toFixed(2)}, ${significance.bootstrap_ci.ci_high.toFixed(2)}]`}
-                        />
-                      </div>
-                      <div className="bg-card p-4">
-                        <Stat
-                          label="Permutation p-value"
-                          value={
-                            <span
-                              className={
-                                significance.permutation.p_value < 0.05
-                                  ? "text-profit"
-                                  : undefined
+                  {significance && (() => {
+                    const iid = significance.bootstrap_ci;
+                    const block = significance.block_bootstrap_ci;
+                    const iidWidth = iid.ci_high - iid.ci_low;
+                    const blockWidth = block.ci_high - block.ci_low;
+                    const widening =
+                      iidWidth > 0 ? (blockWidth - iidWidth) / iidWidth : 0;
+                    const confPct = (iid.confidence * 100).toFixed(0);
+                    return (
+                      <>
+                        <div className="mt-4 grid grid-cols-1 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+                          <div className="bg-card p-4">
+                            <Stat
+                              label="Sharpe (point)"
+                              value={iid.point_estimate.toFixed(2)}
+                              sub={`n=${significance.n_observations} bars`}
+                            />
+                          </div>
+                          <div className="bg-card p-4">
+                            <Stat
+                              label={`${confPct}% CI · i.i.d. bootstrap`}
+                              value={`[${iid.ci_low.toFixed(2)}, ${iid.ci_high.toFixed(2)}]`}
+                              sub={`width ${iidWidth.toFixed(2)} · assumes independence`}
+                            />
+                          </div>
+                          <div className="bg-card p-4">
+                            <Stat
+                              label={`${confPct}% CI · block bootstrap`}
+                              value={`[${block.ci_low.toFixed(2)}, ${block.ci_high.toFixed(2)}]`}
+                              sub={`width ${blockWidth.toFixed(2)} · avg block ${block.avg_block_length.toFixed(1)} bars · ${widening >= 0 ? "+" : ""}${(widening * 100).toFixed(0)}% vs i.i.d.`}
+                            />
+                          </div>
+                          <div className="bg-card p-4">
+                            <Stat
+                              label="Permutation p-value"
+                              value={
+                                <span
+                                  className={
+                                    significance.permutation.p_value < 0.05
+                                      ? "text-profit"
+                                      : undefined
+                                  }
+                                >
+                                  {significance.permutation.p_value.toFixed(3)}
+                                </span>
                               }
-                            >
-                              {significance.permutation.p_value.toFixed(3)}
-                            </span>
-                          }
-                          sub={
-                            significance.permutation.p_value < 0.05
-                              ? "Significant at α=0.05"
-                              : "Not significant"
-                          }
-                        />
-                      </div>
-                    </div>
-                  )}
+                              sub={
+                                significance.permutation.p_value < 0.05
+                                  ? "Significant at α=0.05"
+                                  : "Not significant"
+                              }
+                            />
+                          </div>
+                        </div>
+                        <p className="mt-3 text-xs text-muted-foreground">
+                          The block bootstrap preserves short-run autocorrelation in returns (volatility clustering, momentum) and is the more honest CI for daily strategy returns. A wider block CI vs. the i.i.d. CI is the autocorrelation correction made visible.
+                          {significance.interpretation && (
+                            <>
+                              {" "}
+                              <span className="text-foreground">{significance.interpretation}</span>
+                            </>
+                          )}
+                        </p>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </CardContent>

@@ -5,7 +5,8 @@ Goes beyond textbook Sharpe to provide the metrics that matter in practice:
   * Calmar ratio (return / max DD)
   * Max drawdown depth AND duration (in bars)
   * Annualized return + downside deviation
-  * Alpha & beta vs a benchmark series
+  * Alpha & beta vs a benchmark series, with HC1 robust standard errors,
+    t-stats, p-values and R² (via statsmodels OLS)
   * Deflated Sharpe Ratio (Bailey & López de Prado, 2014) — adjusts the
     observed Sharpe for selection bias when many strategies have been tried.
 
@@ -17,12 +18,39 @@ analysis, optimization, and significance testing.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import numpy as np
+import statsmodels.api as sm
 from scipy import stats
 
 TRADING_DAYS = 252
+
+
+@dataclass
+class AlphaBetaResult:
+    """OLS regression of strategy returns on benchmark returns.
+
+    Alpha and its standard error are annualized and expressed in percent
+    (consistent with `annualized_return_pct`); the t-stat and p-value are
+    invariant to that scaling. Beta and its diagnostics are unitless.
+    Standard errors come from a heteroskedasticity-robust HC1 covariance
+    matrix (statsmodels `cov_type='HC1'`).
+    """
+
+    alpha: float
+    alpha_se: float
+    alpha_t: float
+    alpha_pvalue: float
+    beta: float
+    beta_se: float
+    beta_t: float
+    beta_pvalue: float
+    r_squared: float
+    n_obs: int
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 @dataclass
@@ -35,9 +63,18 @@ class PerformanceMetrics:
     max_drawdown_pct: float
     max_drawdown_duration_bars: int
     downside_deviation: float
-    alpha: float | None  # annualized; None if no benchmark provided
+    alpha: float | None  # annualized %; None if no benchmark provided
     beta: float | None
     deflated_sharpe_ratio: float
+    # Richer regression diagnostics (HC1 robust); all None when no benchmark.
+    alpha_se: float | None = None
+    alpha_t: float | None = None
+    alpha_pvalue: float | None = None
+    beta_se: float | None = None
+    beta_t: float | None = None
+    beta_pvalue: float | None = None
+    r_squared: float | None = None
+    alpha_beta_n_obs: int | None = None
 
 
 def daily_returns(equity: np.ndarray) -> np.ndarray:
@@ -62,7 +99,7 @@ def sortino_ratio(returns: np.ndarray, periods_per_year: int = TRADING_DAYS) -> 
     downside = returns[returns < 0]
     if len(downside) == 0:
         return 0.0
-    downside_std = float(np.sqrt(np.mean(downside ** 2)))
+    downside_std = float(np.sqrt(np.mean(downside**2)))
     if downside_std == 0.0:
         return 0.0
     return float(np.mean(returns)) / downside_std * math.sqrt(periods_per_year)
@@ -109,38 +146,115 @@ def annualized_return_pct(
     return (total ** (periods_per_year / n_periods) - 1.0) * 100.0
 
 
-def downside_deviation(returns: np.ndarray, periods_per_year: int = TRADING_DAYS) -> float:
+def downside_deviation(
+    returns: np.ndarray, periods_per_year: int = TRADING_DAYS
+) -> float:
     """Annualized downside deviation (std of negative returns)."""
     if len(returns) < 2:
         return 0.0
     downside = returns[returns < 0]
     if len(downside) == 0:
         return 0.0
-    return float(np.sqrt(np.mean(downside ** 2)) * math.sqrt(periods_per_year))
+    return float(np.sqrt(np.mean(downside**2)) * math.sqrt(periods_per_year))
 
 
+def compute_alpha_beta(
+    strategy_returns: np.ndarray | None,
+    benchmark_returns: np.ndarray | None,
+    periods_per_year: int = TRADING_DAYS,
+) -> AlphaBetaResult | None:
+    """Annualized alpha / beta of strategy vs benchmark via statsmodels OLS.
+
+    Fits ``r_strategy_t = alpha_daily + beta * r_benchmark_t + e_t`` on the
+    raw daily return series (risk-free rate assumed 0). Standard errors come
+    from HC1 heteroskedasticity-robust covariance (``cov_type='HC1'``), so
+    the reported t-stats and p-values do not assume homoskedastic noise.
+
+    Alpha and ``alpha_se`` are annualized and expressed in percent
+    (multiplied by ``periods_per_year * 100``); the t-stat / p-value are
+    unchanged by that linear rescaling. Beta is unitless.
+
+    Edge cases:
+      * ``benchmark_returns`` is None or empty → returns ``None`` so the
+        caller can degrade gracefully (e.g. no benchmark configured).
+      * Length mismatch between the two series → raises ``ValueError`` so
+        a misalignment bug surfaces loudly.
+      * Fewer than 2 observations, or a benchmark with zero variance →
+        returns ``None`` (regression is undefined).
+      * 2 ≤ n < 30 → still returns a result; the caller can flag the low
+        ``n_obs`` if it wants to refuse to publish the t-stat.
+    """
+    if strategy_returns is None or benchmark_returns is None:
+        return None
+
+    s = np.asarray(strategy_returns, dtype=np.float64)
+    b = np.asarray(benchmark_returns, dtype=np.float64)
+
+    if s.size == 0 or b.size == 0:
+        return None
+    if s.shape != b.shape:
+        raise ValueError(
+            f"strategy_returns and benchmark_returns must have the same length; "
+            f"got {s.shape} vs {b.shape}"
+        )
+    if s.size < 2:
+        return None
+    if not np.isfinite(s).all() or not np.isfinite(b).all():
+        return None
+    if float(np.var(b, ddof=1)) == 0.0:
+        return None
+
+    X = sm.add_constant(b, has_constant="add")
+    try:
+        model = sm.OLS(s, X).fit(cov_type="HC1")
+    except Exception:
+        return None
+
+    daily_alpha = float(model.params[0])
+    daily_alpha_se = float(model.bse[0])
+    beta = float(model.params[1])
+    beta_se = float(model.bse[1])
+
+    scale = periods_per_year * 100.0
+    return AlphaBetaResult(
+        alpha=daily_alpha * scale,
+        alpha_se=daily_alpha_se * scale,
+        alpha_t=float(model.tvalues[0]),
+        alpha_pvalue=float(model.pvalues[0]),
+        beta=beta,
+        beta_se=beta_se,
+        beta_t=float(model.tvalues[1]),
+        beta_pvalue=float(model.pvalues[1]),
+        r_squared=float(model.rsquared),
+        n_obs=int(model.nobs),
+    )
+
+
+# Back-compat shim: the legacy ``alpha_beta`` returned a bare ``(alpha, beta)``
+# tuple. Keep the symbol available for any out-of-tree caller, delegating to
+# the new richer implementation.
 def alpha_beta(
     strategy_returns: np.ndarray,
     benchmark_returns: np.ndarray,
     periods_per_year: int = TRADING_DAYS,
 ) -> tuple[float, float]:
-    """Annualized alpha (%) and beta vs benchmark via OLS on excess returns.
+    """Deprecated thin wrapper around :func:`compute_alpha_beta`.
 
-    Risk-free rate assumed 0 for simplicity.
+    Returns just ``(alpha, beta)`` (annualized %) for backward compatibility.
+    Returns ``(0.0, 0.0)`` when the regression is undefined, matching the
+    historical behaviour of the previous hand-rolled OLS.
     """
-    n = min(len(strategy_returns), len(benchmark_returns))
-    if n < 5:
+    if strategy_returns is None or benchmark_returns is None:
         return 0.0, 0.0
-    s = strategy_returns[-n:]
-    b = benchmark_returns[-n:]
-    var_b = float(np.var(b, ddof=1))
-    if var_b == 0.0:
+    s = np.asarray(strategy_returns, dtype=np.float64)
+    b = np.asarray(benchmark_returns, dtype=np.float64)
+    n = min(s.size, b.size)
+    if n < 2:
         return 0.0, 0.0
-    cov = float(np.cov(s, b, ddof=1)[0, 1])
-    beta = cov / var_b
-    daily_alpha = float(np.mean(s) - beta * np.mean(b))
-    alpha_annual_pct = daily_alpha * periods_per_year * 100.0
-    return float(alpha_annual_pct), float(beta)
+    res = compute_alpha_beta(s[-n:], b[-n:], periods_per_year)
+    if res is None:
+        return 0.0, 0.0
+    return res.alpha, res.beta
 
 
 def deflated_sharpe_ratio(
@@ -175,7 +289,7 @@ def deflated_sharpe_ratio(
     # Variance of the estimated Sharpe (eq. 9)
     sr_hat = observed_sharpe / math.sqrt(TRADING_DAYS)  # de-annualize
     sr0_periodic = sr0 / math.sqrt(TRADING_DAYS)
-    denom = 1.0 - skew * sr_hat + ((kurtosis - 1) / 4.0) * sr_hat ** 2
+    denom = 1.0 - skew * sr_hat + ((kurtosis - 1) / 4.0) * sr_hat**2
     if denom <= 0 or n_returns <= 1:
         return 0.0
     var_sr = denom / (n_returns - 1)
@@ -204,15 +318,22 @@ def compute_all(
     cm = calmar_ratio(ann_ret, mdd)
     dd_dev = downside_deviation(rets, periods_per_year)
 
-    alpha, beta = (None, None)
+    ab: AlphaBetaResult | None = None
     if benchmark_equity is not None and len(benchmark_equity) >= 2:
         bench_rets = daily_returns(benchmark_equity)
-        a, b = alpha_beta(rets, bench_rets, periods_per_year)
-        alpha, beta = a, b
+        # Align lengths defensively; compute_alpha_beta itself enforces equality
+        # but compute_all has historically been forgiving of small mismatches.
+        n = min(len(rets), len(bench_rets))
+        if n >= 2:
+            ab = compute_alpha_beta(rets[-n:], bench_rets[-n:], periods_per_year)
 
     skew = float(stats.skew(rets, bias=False)) if len(rets) > 2 else 0.0
-    kurt = float(stats.kurtosis(rets, fisher=False, bias=False)) if len(rets) > 3 else 3.0
-    dsr = deflated_sharpe_ratio(sr, len(rets), n_trials=n_trials, skew=skew, kurtosis=kurt)
+    kurt = (
+        float(stats.kurtosis(rets, fisher=False, bias=False)) if len(rets) > 3 else 3.0
+    )
+    dsr = deflated_sharpe_ratio(
+        sr, len(rets), n_trials=n_trials, skew=skew, kurtosis=kurt
+    )
 
     return PerformanceMetrics(
         total_return_pct=float(total_ret),
@@ -223,7 +344,15 @@ def compute_all(
         max_drawdown_pct=float(mdd),
         max_drawdown_duration_bars=int(mdd_dur),
         downside_deviation=float(dd_dev),
-        alpha=alpha,
-        beta=beta,
+        alpha=ab.alpha if ab is not None else None,
+        beta=ab.beta if ab is not None else None,
         deflated_sharpe_ratio=float(dsr),
+        alpha_se=ab.alpha_se if ab is not None else None,
+        alpha_t=ab.alpha_t if ab is not None else None,
+        alpha_pvalue=ab.alpha_pvalue if ab is not None else None,
+        beta_se=ab.beta_se if ab is not None else None,
+        beta_t=ab.beta_t if ab is not None else None,
+        beta_pvalue=ab.beta_pvalue if ab is not None else None,
+        r_squared=ab.r_squared if ab is not None else None,
+        alpha_beta_n_obs=ab.n_obs if ab is not None else None,
     )

@@ -1,18 +1,40 @@
-"""Backtest runner — bar-event-driven simulator with realistic execution.
+"""Backtest runner — vectorized bar-event simulator with realistic execution.
 
 Key design points:
 
   * **No look-ahead bias**: a signal generated using bars[0..t] executes at
-    bars[t+1].open. The legacy "signal at close, fill at same close" model
-    is gone.
-  * **Slippage** is modeled as a configurable basis-point haircut applied to
-    the next-bar open in the direction of the trade.
-  * **Commission** supports both percentage of notional and per-share fixed
-    cost (configurable at the same time).
+    bars[t+1].open. Encoded explicitly at the array level as
+    ``pending = sig_type[:-1]`` so future readers cannot accidentally
+    re-introduce look-ahead by indexing the wrong way.
+  * **Slippage** is a configurable basis-point haircut applied to the
+    fill price in the direction of the trade.
+  * **Commissions** support both percentage of notional and per-share fixed
+    cost (configurable simultaneously).
   * **Position sizing** is fixed-fraction of equity at signal time.
   * **Risk overlays** (stop-loss, take-profit, ATR stop) are evaluated
-    intra-bar against the bar's high/low, NOT the close — fills happen at
-    the trigger price plus slippage.
+    intra-bar against bar high/low — fills happen at the trigger price
+    plus slippage. Trailing peak (used by the percentage stop-loss) is
+    cumulative on bar highs since entry, expressed via
+    ``np.maximum.accumulate`` rather than a Python loop.
+
+Algorithm:
+
+  The simulation has only two states (flat / long) and at most one entry
+  and one exit per trade. Instead of a per-bar Python loop we walk
+  *trade-by-trade*:
+
+    1. From the current cursor, find the next BUY-pending bar with a
+       single ``np.where`` on the pre-built ``pending`` array.
+    2. Compute the entry fill, then build masks for all four possible
+       exit triggers (stop-loss, ATR stop, take-profit, pending SELL)
+       across the rest of the array, and locate the first ``True`` with
+       ``np.argmax``.
+    3. Mark-to-market the in-position slice with vectorized
+       ``cash + qty * close[e:j]`` arithmetic.
+    4. Advance the cursor and repeat.
+
+  Because every per-bar arithmetic is numpy, the only Python-level work
+  scales with the number of trades, not the number of bars.
 
 Metrics come from `engine.metrics.compute_all`.
 """
@@ -28,12 +50,13 @@ from data.provider import OHLCVBar
 
 from .indicators import atr
 from .metrics import PerformanceMetrics, compute_all
-from .strategy import Signal, SignalType, Strategy
+from .strategy import SignalType, Strategy
 
 
 # ---------------------------------------------------------------------------
 # Configuration & result dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class BacktestConfig:
@@ -43,9 +66,9 @@ class BacktestConfig:
     end_date: date
     initial_capital: float = 100_000.0
     # Costs
-    commission_pct: float = 0.0          # fraction of notional, e.g. 0.001
-    commission_per_share: float = 0.0    # absolute $ per share
-    slippage_bps: float = 1.0            # 1 bp = 0.01%
+    commission_pct: float = 0.0  # fraction of notional, e.g. 0.001
+    commission_per_share: float = 0.0  # absolute $ per share
+    slippage_bps: float = 1.0  # 1 bp = 0.01%
     # Sizing
     position_size_pct: float = 0.95
     # Risk overlays
@@ -73,25 +96,13 @@ class BacktestResult:
     metrics: PerformanceMetrics
     trades: list[BacktestTradeRecord]
     equity_curve: list[tuple[date, float]]
-    # Per-bar series for downstream stats / charts
     benchmark_equity_curve: list[tuple[date, float]] = field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Internal position tracker
-# ---------------------------------------------------------------------------
-
-@dataclass
-class _Position:
-    quantity: float = 0.0
-    avg_entry_price: float = 0.0
-    peak_price: float = 0.0
-    atr_stop_price: float | None = None
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def run_backtest(
     config: BacktestConfig,
@@ -100,151 +111,165 @@ def run_backtest(
     benchmark_bars: list[OHLCVBar] | None = None,
     n_trials: int = 1,
 ) -> BacktestResult:
-    """Execute a full backtest and return results with metrics.
+    """Execute a vectorized backtest and return results with metrics.
 
-    Args:
-        config: BacktestConfig.
-        bars: full OHLCV history for the ticker (will be filtered by date).
-        sentiment_scores: aligned with `bars` if provided.
-        benchmark_bars: optional benchmark (e.g. SPY) — aligned by date for
-            alpha/beta computation.
-        n_trials: number of strategy variants this result was selected from
-            (used by the Deflated Sharpe Ratio). Pass the grid size when
-            reporting an optimized strategy.
+    Behavior is byte-identical to the prior loop-based implementation:
+    same fills, same equity curve, same metrics. See module docstring for
+    the algorithm.
     """
-    # Filter bars to the configured date range.
     filtered_bars = [b for b in bars if config.start_date <= b.date <= config.end_date]
     if len(filtered_bars) < 2:
         return _empty_result(config)
 
-    # Align sentiment scores with filtered bars if provided.
-    sentiment: list[float] | None = None
-    if sentiment_scores is not None:
-        bar_dates = {b.date: idx for idx, b in enumerate(bars)}
-        sentiment = []
-        for fb in filtered_bars:
-            orig_idx = bar_dates.get(fb.date)
-            if orig_idx is not None and orig_idx < len(sentiment_scores):
-                sentiment.append(sentiment_scores[orig_idx])
-            else:
-                sentiment.append(0.0)
-
+    n = len(filtered_bars)
+    sentiment = _align_sentiment(bars, filtered_bars, sentiment_scores)
     signals = config.strategy.generate_signals(filtered_bars, sentiment)
 
-    # Pre-calculate ATR if needed (uses full history to avoid edge effects).
-    atr_filtered: list[float | None] = [None] * len(filtered_bars)
-    if config.atr_stop_multiplier is not None:
-        all_atrs = atr(
-            [b.high for b in bars],
-            [b.low for b in bars],
-            [b.close for b in bars],
-            period=14,
-        )
-        bar_dates = {b.date: idx for idx, b in enumerate(bars)}
-        for idx, fb in enumerate(filtered_bars):
-            orig_idx = bar_dates.get(fb.date)
-            if orig_idx is not None:
-                atr_filtered[idx] = all_atrs[orig_idx]
+    atr_filtered = _align_atr(bars, filtered_bars, config)
 
-    cash = config.initial_capital
-    pos = _Position()
+    # ---- Vectorize OHLC and signal arrays --------------------------------- #
+    # `closes` is always needed for mark-to-market and force-close; `opens`
+    # is needed for entry/exit fills. `highs`/`lows` are only consulted when
+    # at least one risk overlay is configured — defer their construction.
+    has_overlay = (
+        config.stop_loss_pct is not None
+        or config.take_profit_pct is not None
+        or config.atr_stop_multiplier is not None
+    )
+    opens = np.fromiter((b.open for b in filtered_bars), dtype=np.float64, count=n)
+    closes = np.fromiter((b.close for b in filtered_bars), dtype=np.float64, count=n)
+    if has_overlay:
+        highs = np.fromiter((b.high for b in filtered_bars), dtype=np.float64, count=n)
+        lows = np.fromiter((b.low for b in filtered_bars), dtype=np.float64, count=n)
+    else:
+        highs = closes  # placeholder, never inspected on the fast path
+        lows = closes
+
+    # Encode signal types: +1=BUY, -1=SELL, 0=HOLD.
+    sig_type = np.zeros(n, dtype=np.int8)
+    for i, s in enumerate(signals):
+        if s.type == SignalType.BUY:
+            sig_type[i] = 1
+        elif s.type == SignalType.SELL:
+            sig_type[i] = -1
+
+    # Pending order at bar j is the signal generated at bar j-1
+    # (next-bar-open execution; this is the explicit "no look-ahead" contract).
+    pending = np.zeros(n, dtype=np.int8)
+    pending[1:] = sig_type[:-1]
+
+    # Precompute lookup tables: ``next_buy[k]`` is the smallest index i >= k
+    # with pending[i] == 1, or n if there is none. Likewise for next_sell.
+    # Built right-to-left in one O(n) pass so the per-trade entry/exit search
+    # is a constant-time array lookup instead of a shrinking ``np.flatnonzero``.
+    next_buy = _build_next_index(pending == 1, n)
+    next_sell = _build_next_index(pending == -1, n)
+
+    # ---- Simulation state ------------------------------------------------- #
+    cash = float(config.initial_capital)
+    slip = config.slippage_bps / 10_000.0
     trades: list[BacktestTradeRecord] = []
-    equity_curve: list[tuple[date, float]] = []
+    equity = np.empty(n, dtype=np.float64)
 
-    slip = config.slippage_bps / 10_000.0  # bps -> fraction
+    cursor = 0  # bar index from which we look for the next entry
 
-    # We iterate through bars but execute at bar i+1's open.
-    # Pending order from the previous bar's close-of-day decision:
-    pending_signal: Signal | None = None
+    while cursor < n:
+        # ---- Find next entry: smallest e >= cursor with pending == BUY ---- #
+        e = next_buy[cursor]
+        if e >= n:
+            equity[cursor:n] = cash
+            break
 
-    for i, bar in enumerate(filtered_bars):
-        # ---- Execute any order pending from yesterday's signal ----
-        if pending_signal is not None:
-            exec_price = bar.open
-            if pending_signal.type == SignalType.BUY and pos.quantity == 0:
-                fill_price = exec_price * (1 + slip)
-                cash = _open_long(
-                    cash=cash,
-                    pos=pos,
-                    config=config,
-                    bar=bar,
-                    fill_price=fill_price,
-                    trades=trades,
-                    reason=pending_signal.reason or "Strategy buy",
-                )
-            elif pending_signal.type == SignalType.SELL and pos.quantity > 0:
-                fill_price = exec_price * (1 - slip)
-                cash = _close_long(
-                    cash, pos, config, bar, fill_price, trades,
-                    reason=pending_signal.reason or "Strategy sell",
-                )
-            pending_signal = None
+        if e > cursor:
+            equity[cursor:e] = cash  # flat bars MTM at cash
 
-        # ---- Intra-bar risk overlays (use bar's high/low) ----
-        if pos.quantity > 0:
-            triggered_price: float | None = None
-            triggered_reason = ""
-            # Stop-loss vs trailing peak (uses bar low)
-            if config.stop_loss_pct is not None:
-                stop_price = pos.peak_price * (1 - config.stop_loss_pct)
-                if bar.low <= stop_price:
-                    triggered_price = min(stop_price, bar.open)
-                    triggered_reason = "Stop-loss"
-            # ATR stop
-            if pos.atr_stop_price is not None and bar.low <= pos.atr_stop_price:
-                cand = min(pos.atr_stop_price, bar.open)
-                if triggered_price is None or cand < triggered_price:
-                    triggered_price = cand
-                    triggered_reason = "ATR stop"
-            # Take-profit (uses bar high)
-            if config.take_profit_pct is not None:
-                target = pos.avg_entry_price * (1 + config.take_profit_pct)
-                if bar.high >= target:
-                    cand = max(target, bar.open)
-                    if triggered_price is None or cand > triggered_price:
-                        triggered_price = cand
-                        triggered_reason = "Take-profit"
-            if triggered_price is not None:
-                fill_price = triggered_price * (1 - slip)
-                cash = _close_long(
-                    cash, pos, config, bar, fill_price, trades,
-                    reason=triggered_reason,
-                )
-            else:
-                # Update trailing peak using bar high.
-                if bar.high > pos.peak_price:
-                    pos.peak_price = bar.high
-
-        # ---- Generate signal at end of bar; queue for next bar's open ----
-        sig = signals[i] if i < len(signals) else Signal(SignalType.HOLD, 0.0, "")
-        if sig.type in (SignalType.BUY, SignalType.SELL):
-            pending_signal = sig
-
-        # Mark-to-market with close.
-        equity_curve.append((bar.date, cash + pos.quantity * bar.close))
-
-        # Set ATR stop on entry (after fill above).
-        if (
-            pos.quantity > 0
-            and pos.atr_stop_price is None
-            and config.atr_stop_multiplier is not None
-            and atr_filtered[i] is not None
-        ):
-            pos.atr_stop_price = pos.avg_entry_price - (
-                atr_filtered[i] * config.atr_stop_multiplier
-            )
-
-    # Force-close any open position at the final close (no look-ahead — this
-    # is end-of-data, not a forward fill).
-    if pos.quantity > 0 and equity_curve:
-        last_bar = filtered_bars[-1]
-        cash = _close_long(
-            cash, pos, config, last_bar, last_bar.close * (1 - slip),
-            trades, reason="End of backtest",
+        # ---- Try to open at bar e ---------------------------------------- #
+        opened = _try_open_long(
+            cash=cash,
+            config=config,
+            bar=filtered_bars[e],
+            open_price=float(opens[e]),
+            slip=slip,
+            reason=signals[e - 1].reason or "Strategy buy",
+            trades=trades,
         )
-        equity_curve[-1] = (last_bar.date, cash)
+        if opened is None:
+            # Open failed silently (insufficient cash, fill_price <= 0, ...).
+            # Mark this bar at cash and advance one step; the next pending
+            # signal (sig_type[e]) is already encoded at pending[e+1].
+            equity[e] = cash
+            cursor = e + 1
+            continue
 
-    # ---- Benchmark equity curve aligned to backtest dates ----
+        cash_after_buy, qty, fill_price = opened
+        avg_entry = fill_price
+
+        # ATR stop level is established at the END of the entry bar; the
+        # entry bar's risk-overlay check therefore must NOT see it.
+        atr_stop_price: float | None = None
+        if config.atr_stop_multiplier is not None and atr_filtered[e] is not None:
+            atr_stop_price = avg_entry - atr_filtered[e] * config.atr_stop_multiplier
+
+        # ---- Locate the exit bar via pure-numpy masks -------------------- #
+        j, exit_kind, exit_price, exit_reason = _find_exit_bar(
+            e=e,
+            n=n,
+            opens=opens,
+            highs=highs,
+            lows=lows,
+            pending=pending,
+            next_sell=next_sell,
+            avg_entry=avg_entry,
+            atr_stop_price=atr_stop_price,
+            stop_loss_pct=config.stop_loss_pct,
+            take_profit_pct=config.take_profit_pct,
+            slip=slip,
+            signals=signals,
+        )
+
+        if j is None:
+            # Position runs to the last bar with no trigger. Mark-to-market
+            # in-position slice, then force-close at the final close.
+            equity[e:n] = cash_after_buy + qty * closes[e:n]
+            last_bar = filtered_bars[n - 1]
+            cash = _record_close(
+                cash_after_buy=cash_after_buy,
+                qty=qty,
+                avg_entry=avg_entry,
+                fill_price=float(closes[n - 1]) * (1 - slip),
+                config=config,
+                bar=last_bar,
+                slip=slip,
+                reason="End of backtest",
+                trades=trades,
+            )
+            equity[n - 1] = cash
+            break
+
+        # In-position MTM for [e, j-1] — vectorized.
+        if j > e:
+            equity[e:j] = cash_after_buy + qty * closes[e:j]
+
+        cash = _record_close(
+            cash_after_buy=cash_after_buy,
+            qty=qty,
+            avg_entry=avg_entry,
+            fill_price=exit_price,
+            config=config,
+            bar=filtered_bars[j],
+            slip=slip,
+            reason=exit_reason,
+            trades=trades,
+        )
+        equity[j] = cash  # exit bar MTM = post-close cash, qty is now 0
+        cursor = j + 1
+
+    # ---- Build the public-facing equity curve ----------------------------- #
+    equity_curve: list[tuple[date, float]] = [
+        (filtered_bars[k].date, float(equity[k])) for k in range(n)
+    ]
+
+    # ---- Benchmark equity curve aligned to backtest dates ----------------- #
     bench_curve: list[tuple[date, float]] = []
     if benchmark_bars:
         bench_by_date = {b.date: b.close for b in benchmark_bars}
@@ -255,18 +280,13 @@ def run_backtest(
                 continue
             if first_bench_price is None:
                 first_bench_price = price
-            bench_curve.append(
-                (bd, config.initial_capital * price / first_bench_price)
-            )
+            bench_curve.append((bd, config.initial_capital * price / first_bench_price))
 
-    # ---- Compute metrics ----
-    equity_arr = np.array([v for _, v in equity_curve], dtype=np.float64)
+    # ---- Metrics ---------------------------------------------------------- #
     bench_arr = (
-        np.array([v for _, v in bench_curve], dtype=np.float64)
-        if bench_curve
-        else None
+        np.array([v for _, v in bench_curve], dtype=np.float64) if bench_curve else None
     )
-    metrics = compute_all(equity_arr, benchmark_equity=bench_arr, n_trials=n_trials)
+    metrics = compute_all(equity, benchmark_equity=bench_arr, n_trials=n_trials)
 
     return BacktestResult(
         config=config,
@@ -278,38 +298,181 @@ def run_backtest(
 
 
 # ---------------------------------------------------------------------------
-# Trade helpers
+# Exit-bar search (vectorized over the in-position slice)
 # ---------------------------------------------------------------------------
 
-def _open_long(
+
+def _find_exit_bar(
+    *,
+    e: int,
+    n: int,
+    opens: np.ndarray,
+    highs: np.ndarray,
+    lows: np.ndarray,
+    pending: np.ndarray,
+    next_sell: np.ndarray,
+    avg_entry: float,
+    atr_stop_price: float | None,
+    stop_loss_pct: float | None,
+    take_profit_pct: float | None,
+    slip: float,
+    signals: list,
+) -> tuple[int | None, str, float, str]:
+    """Locate the first bar j in [e, n) at which the long position must close.
+
+    Returns ``(j, kind, exit_price, reason)`` where ``kind`` is one of
+    ``"sell"`` (pending strategy SELL) or ``"risk"`` (overlay trigger), and
+    ``exit_price`` is already adjusted for slippage. If no exit triggers
+    before bar n-1 (inclusive), returns ``(None, "", 0.0, "")`` and the
+    caller force-closes at the final bar's close.
+
+    Fast-path: when no risk overlay is configured the exit is just the next
+    pending SELL signal — one ``next_sell`` table lookup, O(1).
+
+    Slow-path (any overlay set): build SL / ATR / TP / SELL trigger masks
+    over the in-position slice and take the first ``True``. The peak price
+    used by the trailing percentage stop-loss is the cumulative max of bar
+    highs *prior to* the bar being checked, with the entry's fill price as
+    the seed. We construct this with ``np.maximum.accumulate`` on a shifted
+    array — no Python loop.
+    """
+    seg_len = n - e  # placeholder; redefined inside the slow path if entered
+    has_overlay = (
+        stop_loss_pct is not None
+        or atr_stop_price is not None
+        or take_profit_pct is not None
+    )
+
+    # ---- Fast path: only strategy SELL signals can close the position --- #
+    if not has_overlay:
+        # At bar e the pending slot held the BUY that just executed — start
+        # the SELL search at e+1.
+        j = int(next_sell[e + 1]) if e + 1 < n else n
+        if j >= n:
+            return None, "", 0.0, ""
+        exit_price = float(opens[j]) * (1.0 - slip)
+        reason = signals[j - 1].reason or "Strategy sell"
+        return j, "sell", exit_price, reason
+
+    # ---- Slow path: build trigger masks over the in-position slice ------ #
+    # Cap the slice length at the next pending SELL (which is itself an exit
+    # candidate). Anything past that bar can't be the first exit, so there's
+    # no value scanning highs/lows there.
+    sell_j = int(next_sell[e + 1]) if e + 1 < n else n
+    end = min(sell_j + 1, n)  # +1 so that index sell_j is included
+    seg_len = end - e
+    rng = slice(e, end)
+
+    sl_trigger = np.zeros(seg_len, dtype=bool)
+    sl_price_arr: np.ndarray | None = None
+    if stop_loss_pct is not None:
+        # peak_for_check[k] is the trailing peak as seen at the START of bar
+        # (e+k):
+        #   k = 0: just entered, peak = avg_entry
+        #   k > 0: max(avg_entry, max(highs[e..e+k-1]))
+        peak_for_check = np.empty(seg_len, dtype=np.float64)
+        peak_for_check[0] = avg_entry
+        if seg_len > 1:
+            cummax_high = np.maximum.accumulate(highs[e : end - 1])
+            peak_for_check[1:] = np.maximum(avg_entry, cummax_high)
+        sl_price_arr = peak_for_check * (1.0 - stop_loss_pct)
+        sl_trigger = lows[rng] <= sl_price_arr
+
+    atr_trigger = np.zeros(seg_len, dtype=bool)
+    if atr_stop_price is not None:
+        atr_trigger = lows[rng] <= atr_stop_price
+        atr_trigger[0] = False  # ATR stop only activates from bar e+1 onward
+
+    tp_trigger = np.zeros(seg_len, dtype=bool)
+    tp_target = (
+        avg_entry * (1.0 + take_profit_pct) if take_profit_pct is not None else None
+    )
+    if tp_target is not None:
+        tp_trigger = highs[rng] >= tp_target
+
+    sell_pending = pending[rng] == -1
+    sell_pending[0] = False
+
+    any_exit = sl_trigger | atr_trigger | tp_trigger | sell_pending
+    if not any_exit.any():
+        return None, "", 0.0, ""
+
+    rel = int(np.argmax(any_exit))
+    j = e + rel
+
+    # Pending SELL at bar j is consumed at the open BEFORE the intra-bar
+    # risk overlays would fire — strategy signals therefore have priority.
+    if sell_pending[rel]:
+        exit_price = float(opens[j]) * (1.0 - slip)
+        reason = signals[j - 1].reason or "Strategy sell"
+        return j, "sell", exit_price, reason
+
+    # Risk overlay: original priority chain is SL → ATR → TP. Each step can
+    # *replace* the running candidate based on direction (cheaper for stops,
+    # higher for take-profit). This priority chain matches the legacy code
+    # exactly (preserving the documented quirk that TP wins when both SL
+    # and TP fire on the same bar).
+    triggered_price: float | None = None
+    triggered_reason = ""
+    if stop_loss_pct is not None and bool(sl_trigger[rel]):
+        stop_price = float(sl_price_arr[rel])  # type: ignore[index]
+        triggered_price = min(stop_price, float(opens[j]))
+        triggered_reason = "Stop-loss"
+    if atr_stop_price is not None and bool(atr_trigger[rel]):
+        cand = min(atr_stop_price, float(opens[j]))
+        if triggered_price is None or cand < triggered_price:
+            triggered_price = cand
+            triggered_reason = "ATR stop"
+    if tp_target is not None and bool(tp_trigger[rel]):
+        cand = max(tp_target, float(opens[j]))
+        if triggered_price is None or cand > triggered_price:
+            triggered_price = cand
+            triggered_reason = "Take-profit"
+
+    assert triggered_price is not None, "any_exit was True but no trigger resolved"
+    exit_price = triggered_price * (1.0 - slip)
+    return j, "risk", exit_price, triggered_reason
+
+
+# ---------------------------------------------------------------------------
+# Trade-record helpers
+# ---------------------------------------------------------------------------
+
+
+def _try_open_long(
     *,
     cash: float,
-    pos: _Position,
     config: BacktestConfig,
     bar: OHLCVBar,
-    fill_price: float,
-    trades: list,
+    open_price: float,
+    slip: float,
     reason: str,
-) -> float:
-    """Open a long. Mutates `pos`; returns updated cash."""
+    trades: list,
+) -> tuple[float, float, float] | None:
+    """Try to open a long at ``open_price`` adjusted for slippage.
+
+    Returns ``(cash_after, qty, fill_price)`` on success or ``None`` if any
+    of the fail-safes trip (matches the original ``_open_long`` no-op
+    semantics exactly).
+    """
+    fill_price = open_price * (1.0 + slip)
     if fill_price <= 0:
-        return cash
+        return None
     available = cash * config.position_size_pct
     if available <= 0:
-        return cash
-    denom = fill_price * (1 + config.commission_pct) + config.commission_per_share
+        return None
+    denom = fill_price * (1.0 + config.commission_pct) + config.commission_per_share
     if denom <= 0:
-        return cash
+        return None
     qty = available / denom
     if qty <= 0:
-        return cash
+        return None
+
     notional = qty * fill_price
     commission = notional * config.commission_pct + qty * config.commission_per_share
     cost = notional + commission
-    new_cash = cash - cost
-    pos.quantity = qty
-    pos.avg_entry_price = fill_price
-    pos.peak_price = fill_price
+    cash_after = cash - cost
+
     trades.append(
         BacktestTradeRecord(
             date=bar.date,
@@ -323,24 +486,26 @@ def _open_long(
             reason=reason,
         )
     )
-    return new_cash
+    return cash_after, qty, fill_price
 
 
-def _close_long(
-    cash: float,
-    pos: _Position,
+def _record_close(
+    *,
+    cash_after_buy: float,
+    qty: float,
+    avg_entry: float,
+    fill_price: float,
     config: BacktestConfig,
     bar: OHLCVBar,
-    fill_price: float,
-    trades: list,
+    slip: float,
     reason: str,
+    trades: list,
 ) -> float:
-    qty = pos.quantity
+    """Close the long and append a sell trade record. Returns post-close cash."""
     notional = qty * fill_price
     commission = notional * config.commission_pct + qty * config.commission_per_share
     proceeds = notional - commission
-    pnl = proceeds - qty * pos.avg_entry_price
-    new_cash = cash + proceeds
+    pnl = proceeds - qty * avg_entry
     trades.append(
         BacktestTradeRecord(
             date=bar.date,
@@ -354,22 +519,84 @@ def _close_long(
             reason=reason,
         )
     )
-    pos.quantity = 0.0
-    pos.avg_entry_price = 0.0
-    pos.peak_price = 0.0
-    pos.atr_stop_price = None
-    return new_cash
+    return cash_after_buy + proceeds
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Sentiment / ATR alignment helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_next_index(mask: np.ndarray, n: int) -> np.ndarray:
+    """Return ``out`` of length n+1 where ``out[k]`` is the smallest index
+    i >= k such that ``mask[i]`` is True, or ``n`` if no such i exists.
+
+    Built with a single right-to-left ``np.minimum.accumulate``-style pass
+    over an int array, then a final O(n) Python copy is avoided by taking
+    a reversed view — the entire build is linear and allocation-light.
+    """
+    # Place the index value at every True position; n at every False position.
+    # Then a reverse cumulative-min gives "next True at-or-after k".
+    idx = np.where(mask, np.arange(n, dtype=np.int64), n)
+    # Reverse, take running min, reverse back.
+    rev = idx[::-1]
+    rev_min = np.minimum.accumulate(rev)
+    nxt = rev_min[::-1].copy()
+    # Append a sentinel at index n so callers can safely index with k+1.
+    out = np.empty(n + 1, dtype=np.int64)
+    out[:n] = nxt
+    out[n] = n
+    return out
+
+
+def _align_sentiment(
+    bars: list[OHLCVBar],
+    filtered_bars: list[OHLCVBar],
+    sentiment_scores: list[float] | None,
+) -> list[float] | None:
+    if sentiment_scores is None:
+        return None
+    bar_dates = {b.date: idx for idx, b in enumerate(bars)}
+    out: list[float] = []
+    for fb in filtered_bars:
+        orig_idx = bar_dates.get(fb.date)
+        if orig_idx is not None and orig_idx < len(sentiment_scores):
+            out.append(sentiment_scores[orig_idx])
+        else:
+            out.append(0.0)
+    return out
+
+
+def _align_atr(
+    bars: list[OHLCVBar],
+    filtered_bars: list[OHLCVBar],
+    config: BacktestConfig,
+) -> list[float | None]:
+    out: list[float | None] = [None] * len(filtered_bars)
+    if config.atr_stop_multiplier is None:
+        return out
+    all_atrs = atr(
+        [b.high for b in bars],
+        [b.low for b in bars],
+        [b.close for b in bars],
+        period=14,
+    )
+    bar_dates = {b.date: idx for idx, b in enumerate(bars)}
+    for idx, fb in enumerate(filtered_bars):
+        orig_idx = bar_dates.get(fb.date)
+        if orig_idx is not None:
+            out[idx] = all_atrs[orig_idx]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Empty-result helper
+# ---------------------------------------------------------------------------
+
 
 def _empty_result(config: BacktestConfig) -> BacktestResult:
     metrics = compute_all(np.array([], dtype=np.float64))
-    return BacktestResult(
-        config=config, metrics=metrics, trades=[], equity_curve=[]
-    )
+    return BacktestResult(config=config, metrics=metrics, trades=[], equity_curve=[])
 
 
 # ---------------------------------------------------------------------------

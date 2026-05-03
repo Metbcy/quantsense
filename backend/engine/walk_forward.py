@@ -66,15 +66,25 @@ class WalkForwardResult:
 
 
 def _grid(param_ranges: dict[str, dict]) -> list[dict[str, Any]]:
-    """Expand a {name: {type, min, max, step | options}} dict to a list of dicts."""
+    """Expand a {name: {type, min, max, step | options}} dict to a list of dicts.
+
+    Iterates parameter names in **sorted** order so the grid layout is
+    independent of the caller's dict-construction order. CPython 3.7+
+    preserves insertion order, but that's an implementation detail —
+    explicit sorting makes window selection byte-stable across Python
+    versions and across callers that build the dict differently.
+    """
     keys, value_lists = [], []
-    for name, spec in param_ranges.items():
+    for name in sorted(param_ranges.keys()):
+        spec = param_ranges[name]
         keys.append(name)
         if spec.get("type") == "categorical":
             value_lists.append(list(spec["options"]))
         elif spec.get("type") == "int":
             step = int(spec.get("step") or 1)
-            value_lists.append(list(range(int(spec["min"]), int(spec["max"]) + 1, step)))
+            value_lists.append(
+                list(range(int(spec["min"]), int(spec["max"]) + 1, step))
+            )
         elif spec.get("type") == "float":
             step = float(spec.get("step") or 0.1)
             n = int((float(spec["max"]) - float(spec["min"])) / step) + 1
@@ -94,6 +104,7 @@ def run_walk_forward(
     train_test_ratio: float = 4.0,  # train is 4x as long as one test slice (anchored)
     initial_capital: float = 100_000.0,
     metric: str = "sharpe_ratio",
+    seed: int | None = 42,
 ) -> WalkForwardResult:
     """Run an anchored walk-forward optimization.
 
@@ -105,7 +116,22 @@ def run_walk_forward(
             rolling mode.
         metric: which metric to optimize on the IS slice (sharpe_ratio is
             standard).
+        seed: reproducibility seed. The current implementation is fully
+            deterministic given (bars, param_ranges, n_windows, metric)
+            — the param grid is iterated in sorted order and each
+            backtest run has no stochastic component — so this seed is
+            primarily reserved for any future stochastic tie-breaking
+            and to give the public signature a single, obvious knob to
+            pin reproducibility against. Using `np.random.default_rng`
+            (not `np.random.seed`) keeps process-global RNG state
+            untouched.
     """
+    # Bind a Generator even though current logic doesn't draw from it;
+    # this anchors the reproducibility contract at the public API
+    # boundary. Future stochastic logic (e.g. random tie-breakers across
+    # equal-Sharpe params) MUST draw from this generator.
+    _rng = np.random.default_rng(seed)  # noqa: F841  -- reserved
+
     strategy_cls = STRATEGY_REGISTRY.get(strategy_type)
     if not strategy_cls:
         raise ValueError(f"Strategy '{strategy_type}' not in registry")
@@ -124,7 +150,9 @@ def run_walk_forward(
     oos_total = len(bars) - initial_train_n
     test_window_n = max(oos_total // n_windows, 5)
     if test_window_n < 5:
-        raise ValueError("Test window size too small; reduce n_windows or use more data")
+        raise ValueError(
+            "Test window size too small; reduce n_windows or use more data"
+        )
 
     windows: list[WalkForwardWindow] = []
     oos_equity: list[tuple[date, float]] = []
@@ -212,6 +240,7 @@ def run_walk_forward(
     if oos_returns:
         all_oos = np.concatenate(oos_returns)
         from .metrics import sharpe_ratio
+
         agg_oos = sharpe_ratio(all_oos)
         # Deflated Sharpe: account for the size of the param grid.
         equity_oos = np.array([v for _, v in oos_equity], dtype=np.float64)

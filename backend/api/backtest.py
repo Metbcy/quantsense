@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 from data.shared import provider
 from engine.backtest import BacktestConfig, run_backtest
 from engine.optimizer import run_strategy_optimization
+from engine.run_hash import compute_run_hash, seed_from_run_hash
 from engine.significance import (
+    bootstrap_sharpe_block,
     bootstrap_sharpe_ci,
     permutation_test_sharpe,
     returns_from_equity,
@@ -21,10 +23,7 @@ from engine.strategy import STRATEGY_REGISTRY
 from models.database import get_db
 from models.pydantic_models import (
     BacktestRequest,
-    BacktestResponse,
-    BacktestTradeResponse,
     OptimizeRequest,
-    OptimizationResponse,
 )
 from models.schemas import BacktestResult as BacktestResultModel
 from models.schemas import BacktestTrade as BacktestTradeModel
@@ -55,7 +54,7 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
     # 2. Fetch OHLCV data
     try:
         bars = await provider.get_ohlcv(req.ticker, req.start_date, req.end_date)
-    except Exception as exc:
+    except Exception:
         logger.exception("Market data fetch failed for %s", req.ticker)
         raise HTTPException(status_code=500, detail="Failed to fetch market data")
 
@@ -80,9 +79,13 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
 
     try:
         result = run_backtest(config, bars)
-    except Exception as exc:
+    except Exception:
         logger.exception("Backtest execution failed for %s", req.ticker)
         raise HTTPException(status_code=500, detail="Backtest execution failed")
+
+    # Reproducibility hash — same (bars, config, code_version) -> same hash
+    # -> guaranteed identical equity curve / metrics / CIs.
+    run_hash = compute_run_hash(bars, config)
 
     # 4. Save strategy record
     db_strategy = StrategyModel(
@@ -95,7 +98,11 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
 
     # Trade-level stats (computed from trades, not metrics object)
     sell_pnls = [t.pnl for t in result.trades if t.side == "sell"]
-    win_rate = (len([p for p in sell_pnls if p > 0]) / len(sell_pnls) * 100.0) if sell_pnls else 0.0
+    win_rate = (
+        (len([p for p in sell_pnls if p > 0]) / len(sell_pnls) * 100.0)
+        if sell_pnls
+        else 0.0
+    )
     total_trades = len(sell_pnls)
     initial_capital = result.config.initial_capital
     final_value = result.equity_curve[-1][1] if result.equity_curve else initial_capital
@@ -134,7 +141,13 @@ async def run(req: BacktestRequest, db: Session = Depends(get_db)):
     db.refresh(db_result)
 
     # Build response matching frontend expected shape
-    return _format_result(db_result, req.strategy_type, result.equity_curve, result.metrics)
+    return _format_result(
+        db_result,
+        req.strategy_type,
+        result.equity_curve,
+        result.metrics,
+        run_hash=run_hash,
+    )
 
 
 @router.post("/optimize")
@@ -159,7 +172,7 @@ async def optimize_strategy(req: OptimizeRequest) -> dict:
         param_ranges_dict = {
             name: pr.model_dump() for name, pr in req.param_ranges.items()
         }
-        
+
         result = run_strategy_optimization(
             ticker=req.ticker,
             strategy_type=req.strategy_type,
@@ -169,7 +182,7 @@ async def optimize_strategy(req: OptimizeRequest) -> dict:
             param_ranges=param_ranges_dict,
             initial_capital=req.initial_capital,
             n_trials=req.n_trials,
-            metric=req.metric
+            metric=req.metric,
         )
         return result
     except Exception as exc:
@@ -177,8 +190,20 @@ async def optimize_strategy(req: OptimizeRequest) -> dict:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-def _format_result(db_result, strategy_type: str = "", equity_curve=None, metrics_obj=None):
-    """Format a DB backtest result into the frontend-expected shape."""
+def _format_result(
+    db_result,
+    strategy_type: str = "",
+    equity_curve=None,
+    metrics_obj=None,
+    run_hash: str | None = None,
+):
+    """Format a DB backtest result into the frontend-expected shape.
+
+    `run_hash` is included at the top level when the caller has both
+    bars and config in scope (i.e. `/run` and `/significance`). Listing
+    endpoints (`/results`, `/results/{id}`) cannot recompute it without
+    refetching market data, so they omit it.
+    """
     trades = [
         {
             "date": str(t.date),
@@ -201,7 +226,11 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None, metric
     worst_pnl = min(sell_pnls) if sell_pnls else 0
     gross_profit = sum(p for p in sell_pnls if p > 0)
     gross_loss = abs(sum(p for p in sell_pnls if p < 0))
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else (999.0 if gross_profit > 0 else 0)
+    profit_factor = (
+        gross_profit / gross_loss
+        if gross_loss > 0
+        else (999.0 if gross_profit > 0 else 0)
+    )
 
     if metrics_obj:
         # New PerformanceMetrics doesn't carry trade-level stats; trade-derived
@@ -212,14 +241,29 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None, metric
     quant_extras: dict = {}
     if metrics_obj is not None:
         quant_extras = {
-            "annualized_return_pct": getattr(metrics_obj, "annualized_return_pct", None),
+            "annualized_return_pct": getattr(
+                metrics_obj, "annualized_return_pct", None
+            ),
             "sortino_ratio": getattr(metrics_obj, "sortino_ratio", None),
             "calmar_ratio": getattr(metrics_obj, "calmar_ratio", None),
-            "max_drawdown_duration_bars": getattr(metrics_obj, "max_drawdown_duration_bars", None),
+            "max_drawdown_duration_bars": getattr(
+                metrics_obj, "max_drawdown_duration_bars", None
+            ),
             "downside_deviation": getattr(metrics_obj, "downside_deviation", None),
             "alpha": getattr(metrics_obj, "alpha", None),
             "beta": getattr(metrics_obj, "beta", None),
-            "deflated_sharpe_ratio": getattr(metrics_obj, "deflated_sharpe_ratio", None),
+            # Statsmodels OLS regression diagnostics (HC1 robust SEs).
+            "alpha_se": getattr(metrics_obj, "alpha_se", None),
+            "alpha_t": getattr(metrics_obj, "alpha_t", None),
+            "alpha_pvalue": getattr(metrics_obj, "alpha_pvalue", None),
+            "beta_se": getattr(metrics_obj, "beta_se", None),
+            "beta_t": getattr(metrics_obj, "beta_t", None),
+            "beta_pvalue": getattr(metrics_obj, "beta_pvalue", None),
+            "r_squared": getattr(metrics_obj, "r_squared", None),
+            "alpha_beta_n_obs": getattr(metrics_obj, "alpha_beta_n_obs", None),
+            "deflated_sharpe_ratio": getattr(
+                metrics_obj, "deflated_sharpe_ratio", None
+            ),
         }
 
     return {
@@ -228,7 +272,10 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None, metric
         "strategy_type": strategy_type,
         "start_date": str(db_result.start_date),
         "end_date": str(db_result.end_date),
-        "created_at": db_result.created_at.isoformat() if db_result.created_at else None,
+        "created_at": db_result.created_at.isoformat()
+        if db_result.created_at
+        else None,
+        "run_hash": run_hash,
         "metrics": {
             "initial_capital": db_result.initial_capital,
             "final_value": db_result.final_value,
@@ -244,20 +291,22 @@ def _format_result(db_result, strategy_type: str = "", equity_curve=None, metric
             **quant_extras,
         },
         "trades": trades,
-        "equity_curve": [
-            [str(d), v] for d, v in (equity_curve or [])
-        ],
+        "equity_curve": [[str(d), v] for d, v in (equity_curve or [])],
     }
 
 
 @router.get("/results")
-async def list_results(page: int = 1, page_size: int = 20, db: Session = Depends(get_db)):
+async def list_results(
+    page: int = 1, page_size: int = 20, db: Session = Depends(get_db)
+):
     """List all saved backtest results (paginated)."""
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
     offset = (page - 1) * page_size
 
-    query = db.query(BacktestResultModel).order_by(BacktestResultModel.created_at.desc())
+    query = db.query(BacktestResultModel).order_by(
+        BacktestResultModel.created_at.desc()
+    )
     total = query.count()
     results = query.offset(offset).limit(page_size).all()
 
@@ -272,7 +321,11 @@ async def list_results(page: int = 1, page_size: int = 20, db: Session = Depends
 @router.get("/results/{result_id}")
 async def get_result(result_id: int, db: Session = Depends(get_db)):
     """Get a specific backtest result with its trades."""
-    result = db.query(BacktestResultModel).filter(BacktestResultModel.id == result_id).first()
+    result = (
+        db.query(BacktestResultModel)
+        .filter(BacktestResultModel.id == result_id)
+        .first()
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="Backtest result not found")
     return _format_result(result)
@@ -281,11 +334,17 @@ async def get_result(result_id: int, db: Session = Depends(get_db)):
 @router.delete("/results/{result_id}")
 async def delete_result(result_id: int, db: Session = Depends(get_db)):
     """Delete a backtest result and its trades."""
-    result = db.query(BacktestResultModel).filter(BacktestResultModel.id == result_id).first()
+    result = (
+        db.query(BacktestResultModel)
+        .filter(BacktestResultModel.id == result_id)
+        .first()
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="Backtest result not found")
 
-    db.query(BacktestTradeModel).filter(BacktestTradeModel.backtest_id == result_id).delete()
+    db.query(BacktestTradeModel).filter(
+        BacktestTradeModel.backtest_id == result_id
+    ).delete()
     db.delete(result)
     db.commit()
     return {"detail": "Backtest result deleted"}
@@ -390,7 +449,9 @@ async def compare_strategies(
 
 
 @router.get("/results/{result_id}/export")
-async def export_result(result_id: int, format: str = "csv", db: Session = Depends(get_db)):
+async def export_result(
+    result_id: int, format: str = "csv", db: Session = Depends(get_db)
+):
     """Export a backtest result as CSV."""
     result = (
         db.query(BacktestResultModel)
@@ -425,20 +486,29 @@ async def export_result(result_id: int, format: str = "csv", db: Session = Depen
 async def significance(req: BacktestRequest):
     """Run a backtest, then test whether its Sharpe is statistically real.
 
-    Two outputs:
-      * `bootstrap_ci`: 95% CI on Sharpe via i.i.d. bootstrap (n=2000)
-      * `permutation`: one-sided p-value vs random shuffles of the same
-        return distribution (n=2000)
+    Three outputs:
+      * `bootstrap_ci`: 95% CI on Sharpe via i.i.d. bootstrap (n=2000).
+        Assumes daily returns are independent.
+      * `block_bootstrap_ci`: 95% CI via stationary block bootstrap
+        (Politis & Romano 1994) with Politis-White optimal block length.
+        Preserves short-run autocorrelation (volatility clustering,
+        momentum) so the CI is honest under realistic return dynamics.
+      * `permutation`: one-sided p-value vs sign-flipped copies of the
+        same return distribution (n=2000).
 
-    A bootstrap CI that comfortably excludes 0, *and* a permutation
-    p-value < 0.05, together suggest the strategy is doing more than
-    riding the underlying return distribution.
+    The block bootstrap CI is typically *wider* than the i.i.d. one for
+    real strategy returns; that gap is the autocorrelation correction. A
+    block CI that still excludes 0, plus a permutation p-value < 0.05,
+    together suggest the strategy is doing more than riding the
+    underlying return distribution.
     """
     import numpy as np
 
     strategy_cls = STRATEGY_REGISTRY.get(req.strategy_type)
     if strategy_cls is None:
-        raise HTTPException(status_code=400, detail=f"Unknown strategy '{req.strategy_type}'")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown strategy '{req.strategy_type}'"
+        )
 
     bars = await provider.get_ohlcv(req.ticker, req.start_date, req.end_date)
     if not bars:
@@ -457,14 +527,25 @@ async def significance(req: BacktestRequest):
     equity = np.array([v for _, v in result.equity_curve], dtype=np.float64)
     rets = returns_from_equity(equity)
     if len(rets) < 5:
-        raise HTTPException(status_code=400, detail="Backtest produced too few return observations")
+        raise HTTPException(
+            status_code=400, detail="Backtest produced too few return observations"
+        )
 
-    boot = bootstrap_sharpe_ci(rets)
-    perm = permutation_test_sharpe(rets)
+    # Reproducibility: derive a deterministic seed from the run hash so
+    # the same (bars, config) request ALWAYS produces the same CI bounds
+    # and p-value. This is the user-visible reproducibility contract for
+    # the /significance endpoint.
+    run_hash = compute_run_hash(bars, config)
+    seed = seed_from_run_hash(run_hash)
+
+    boot = bootstrap_sharpe_ci(rets, seed=seed)
+    block = bootstrap_sharpe_block(rets, seed=seed)
+    perm = permutation_test_sharpe(rets, seed=seed)
 
     return {
         "ticker": req.ticker,
         "strategy_type": req.strategy_type,
+        "run_hash": run_hash,
         "n_observations": int(len(rets)),
         "bootstrap_ci": {
             "point_estimate": boot.point_estimate,
@@ -473,6 +554,14 @@ async def significance(req: BacktestRequest):
             "confidence": boot.confidence,
             "n_resamples": boot.n_resamples,
         },
+        "block_bootstrap_ci": {
+            "point_estimate": block.point_estimate,
+            "ci_low": block.ci_low,
+            "ci_high": block.ci_high,
+            "confidence": block.confidence,
+            "n_resamples": block.n_resamples,
+            "avg_block_length": block.avg_block_length,
+        },
         "permutation": {
             "observed_sharpe": perm.observed_sharpe,
             "p_value": perm.p_value,
@@ -480,17 +569,39 @@ async def significance(req: BacktestRequest):
             "null_std": perm.null_std,
             "n_permutations": perm.n_permutations,
         },
-        "interpretation": _interpret(boot, perm),
+        "interpretation": _interpret(boot, block, perm),
     }
 
 
-def _interpret(boot, perm) -> str:
+def _interpret(boot, block, perm) -> str:
+    """Interpretation prefers the block-bootstrap CI as the primary signal
+    on Sharpe uncertainty, since it accounts for return autocorrelation."""
     sig = perm.p_value < 0.05
-    pos = boot.ci_low > 0
-    if sig and pos:
-        return "Sharpe is positive with 95% confidence and significantly different from random shuffles (p<0.05). Signal is plausibly real."
-    if sig and not pos:
-        return "Significant per permutation test but bootstrap CI includes zero — interpret with caution."
-    if pos and not sig:
-        return "Bootstrap CI is positive but permutation p-value is not significant — Sharpe may reflect distributional luck."
-    return "Insufficient evidence: CI includes zero and permutation p-value is not significant. Strategy is not distinguishable from chance on this sample."
+    pos_block = block.ci_low > 0
+    pos_iid = boot.ci_low > 0
+
+    iid_width = boot.ci_high - boot.ci_low
+    block_width = block.ci_high - block.ci_low
+    widening_pct = (
+        100.0 * (block_width - iid_width) / iid_width if iid_width > 0 else 0.0
+    )
+    autocorr_note = (
+        f" Block CI is {widening_pct:+.0f}% wider than the i.i.d. CI "
+        f"(avg block length {block.avg_block_length:.1f} bars), reflecting "
+        f"the autocorrelation correction."
+    )
+
+    if sig and pos_block:
+        base = "Sharpe is positive with 95% confidence under the block bootstrap and significantly different from sign-flipped nulls (p<0.05). Signal is plausibly real."
+    elif sig and pos_iid and not pos_block:
+        base = "i.i.d. bootstrap CI excludes zero and permutation p-value is significant, but the autocorrelation-aware block CI includes zero — the i.i.d. result was likely overstated. Treat with caution."
+    elif sig and not pos_iid:
+        base = "Significant per permutation test but both bootstrap CIs include zero — interpret with caution."
+    elif pos_block and not sig:
+        base = "Block bootstrap CI is positive but permutation p-value is not significant — Sharpe may reflect distributional luck."
+    elif pos_iid and not pos_block and not sig:
+        base = "Only the i.i.d. bootstrap CI excludes zero; once autocorrelation is accounted for via the block bootstrap, the CI includes zero. Insufficient evidence."
+    else:
+        base = "Insufficient evidence: both CIs include zero and permutation p-value is not significant. Strategy is not distinguishable from chance on this sample."
+
+    return base + autocorr_note

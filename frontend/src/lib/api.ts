@@ -98,6 +98,10 @@ export interface BootstrapCI {
   n_resamples: number;
 }
 
+export interface BlockBootstrapCI extends BootstrapCI {
+  avg_block_length: number;
+}
+
 export interface PermutationTest {
   observed_sharpe: number;
   p_value: number;
@@ -111,7 +115,9 @@ export interface SignificanceResponse {
   strategy_type: string;
   n_observations: number;
   bootstrap_ci: BootstrapCI;
+  block_bootstrap_ci: BlockBootstrapCI;
   permutation: PermutationTest;
+  interpretation?: string;
 }
 
 // ── Walk-forward (returned from /backtest/optimize) ───────────────

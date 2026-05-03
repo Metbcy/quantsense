@@ -11,6 +11,9 @@ feedparser==6.0.11
 numpy==1.26.4
 pandas==2.2.3
 scipy==1.14.1
+arch>=8.0,<9
+statsmodels>=0.14
+empyrical-reloaded>=0.5
 python-dotenv==1.0.1
 websockets==13.0
 apscheduler==3.10.4
