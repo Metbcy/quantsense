@@ -302,6 +302,134 @@ export interface CompareResponse {
   end_date: string;
   initial_capital: number;
   results: CompareResult[];
+  // Hansen 2005 SPA test result. `null` when fewer than 2 strategies were
+  // compared or the benchmark series could not be aligned.
+  spa: SPAResult | null;
+}
+
+// ── Hansen 2005 SPA test ──────────────────────────────────────────
+export interface SPAResult {
+  best_strategy_index: number;
+  best_strategy_type: string | null;
+  best_sharpe: number;
+  spa_pvalue: number;
+  spa_pvalue_consistent: number;
+  n_strategies: number;
+  n_resamples: number;
+  n_obs: number;
+  block_length: number;
+}
+
+// ── Multi-asset portfolio backtest ───────────────────────────────
+export type RebalanceSchedule =
+  | "never"
+  | "daily"
+  | "weekly"
+  | "monthly"
+  | "quarterly";
+
+export interface PortfolioBacktestRequest {
+  tickers: string[];
+  weights: Record<string, number> | null;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  rebalance_schedule: RebalanceSchedule;
+  slippage_bps: number;
+  commission_per_share: number;
+  commission_pct: number;
+  benchmark_ticker: string | null;
+  seed?: number;
+}
+
+export interface PortfolioFillRecord {
+  date: string;
+  side: string;
+  quantity: number;
+  fill_price: number;
+  notional: number;
+  commission: number;
+  slippage_cost: number;
+  reason: string;
+}
+
+export interface PortfolioMetrics {
+  total_return_pct: number;
+  annualized_return_pct: number | null;
+  sharpe_ratio: number;
+  sortino_ratio: number | null;
+  calmar_ratio: number | null;
+  max_drawdown_pct: number;
+  max_drawdown_duration_bars: number | null;
+  downside_deviation: number | null;
+  alpha: number | null;
+  beta: number | null;
+  deflated_sharpe_ratio: number | null;
+}
+
+export interface PortfolioConfigEcho {
+  tickers: string[];
+  weights: Record<string, number> | null;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  rebalance_schedule: RebalanceSchedule;
+  slippage_bps: number;
+  commission_per_share: number;
+  commission_pct: number;
+  benchmark_ticker: string | null;
+  seed: number;
+}
+
+// The backend serializes the equity curve as `[[isoDate, value], ...]`
+// tuples (and likewise for the benchmark) — same shape as the existing
+// single-asset BacktestResult.equity_curve.
+export interface PortfolioBacktestResult {
+  run_hash: string;
+  config: PortfolioConfigEcho;
+  metrics: PortfolioMetrics;
+  equity_curve: [string, number][];
+  equity_curve_full_length: number;
+  equity_curve_returned_length: number;
+  final_cash: number;
+  final_positions: Record<string, number>;
+  total_turnover: number;
+  per_ticker_pnl: Record<string, { realized: number; unrealized: number }>;
+  fills: Record<string, PortfolioFillRecord[]>;
+  benchmark_equity_curve: [string, number][];
+}
+
+// ── Fama-French factor exposure ──────────────────────────────────
+export type FactorModel = "ff3" | "ff5" | "carhart4";
+
+export interface FactorExposureRequest {
+  result_id?: number;
+  returns?: number[];
+  dates?: string[];
+  model: FactorModel;
+  risk_free_subtract?: boolean;
+}
+
+export interface FactorLoading {
+  coefficient: number;
+  se: number;
+  t_stat: number;
+  pvalue: number;
+}
+
+export interface FactorExposureResult {
+  model: FactorModel;
+  alpha: number;
+  alpha_se: number;
+  alpha_t: number;
+  alpha_pvalue: number;
+  factors: Record<string, FactorLoading>;
+  r_squared: number;
+  adj_r_squared: number;
+  n_obs: number;
+  start_date: string | null;
+  end_date: string | null;
+  risk_free_subtracted: boolean;
 }
 
 export interface ChartIndicators {
@@ -446,6 +574,16 @@ export const api = {
       fetchJson<void>(`/backtest/results/${id}`, { method: 'DELETE' }),
     compare: (ticker: string, startDate: string, endDate: string, capital?: number) =>
       fetchJson<CompareResponse>(`/backtest/compare?ticker=${ticker}&start_date=${startDate}&end_date=${endDate}&initial_capital=${capital || 100000}`, { method: 'POST' }),
+    portfolio: (data: PortfolioBacktestRequest) =>
+      fetchJson<PortfolioBacktestResult>('/backtest/portfolio', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    factorExposure: (data: FactorExposureRequest) =>
+      fetchJson<FactorExposureResult>('/backtest/factor-exposure', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
     exportCsv: (id: number) => `${API_BASE}/backtest/results/${id}/export?format=csv`,
   },
 
@@ -497,6 +635,23 @@ export const api = {
   },
 
 };
+
+// ── Top-level Tier 2 convenience exports ─────────────────────────
+// Thin aliases over `api.backtest.portfolio` / `api.backtest.factorExposure`
+// for consumers that want named imports (and to satisfy the documented
+// public API of this module).
+
+export function runPortfolioBacktest(
+  req: PortfolioBacktestRequest
+): Promise<PortfolioBacktestResult> {
+  return api.backtest.portfolio(req);
+}
+
+export function computeFactorExposure(
+  req: FactorExposureRequest
+): Promise<FactorExposureResult> {
+  return api.backtest.factorExposure(req);
+}
 
 // ── WebSocket helper ──────────────────────────────────────────────────────────
 

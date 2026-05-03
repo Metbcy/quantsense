@@ -40,6 +40,7 @@ import hashlib
 import json
 import logging
 import subprocess
+from collections.abc import Mapping
 from datetime import date, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from data.provider import OHLCVBar
 
     from .backtest import BacktestConfig
+    from .portfolio import PortfolioBacktestConfig
 
 logger = logging.getLogger(__name__)
 
@@ -133,18 +135,21 @@ def _bars_payload(price_data: list[OHLCVBar]) -> list[list[Any]]:
 
 
 def compute_run_hash(
-    price_data: list[OHLCVBar],
-    config: BacktestConfig,
+    price_data: list[OHLCVBar] | Mapping[str, list[OHLCVBar]],
+    config: BacktestConfig | PortfolioBacktestConfig,
     code_version: str | None = None,
 ) -> str:
     """Compute a 16-char hex sha256 prefix over canonical(price_data + config + code_version).
 
     Args:
         price_data: OHLCV bars exactly as they will be fed to
-            ``run_backtest``. Order matters.
-        config: the ``BacktestConfig`` (including the strategy instance,
-            whose class name and ``params`` dict are folded into the
-            hash).
+            ``run_backtest`` (single-asset list) OR a ``{ticker: bars}``
+            mapping for the multi-asset portfolio path. For the mapping
+            shape, tickers are encoded in sorted order so dict
+            insertion-order leaks cannot affect the digest.
+        config: the ``BacktestConfig`` or ``PortfolioBacktestConfig``.
+            Both are dataclasses; ``_canonicalize`` walks them
+            recursively (including the nested strategy / weights dicts).
         code_version: override for testing. ``None`` uses the module-level
             ``CODE_VERSION`` captured at import time from ``git rev-parse
             HEAD`` (or ``"dev"`` if not in a git repo).
@@ -154,8 +159,15 @@ def compute_run_hash(
         is plenty to make accidental collisions a non-event for
         backtests.
     """
+    if isinstance(price_data, Mapping):
+        bars_canonical: Any = {
+            str(ticker): _bars_payload(bars)
+            for ticker, bars in sorted(price_data.items(), key=lambda kv: str(kv[0]))
+        }
+    else:
+        bars_canonical = _bars_payload(price_data)
     payload = {
-        "price_data": _bars_payload(price_data),
+        "price_data": bars_canonical,
         "config": _canonicalize(config),
         "code_version": code_version if code_version is not None else CODE_VERSION,
     }

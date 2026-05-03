@@ -1,5 +1,6 @@
 from functools import lru_cache
 import secrets
+from pathlib import Path
 
 from pydantic_settings import BaseSettings
 from typing import Optional
@@ -11,6 +12,10 @@ def _generate_secret() -> str:
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./quantsense.db"
+
+    QUANTSENSE_CACHE_DIR: Path = Path.home() / ".quantsense" / "cache" / "ohlcv"
+    QUANTSENSE_CACHE_ENABLED: bool = True
+    QUANTSENSE_CACHE_FRESHNESS_HOURS: int = 24
 
     ALPHA_VANTAGE_API_KEY: Optional[str] = None
     NEWSAPI_KEY: Optional[str] = None

@@ -5,6 +5,7 @@ import io
 import logging
 from datetime import date
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from engine.run_hash import compute_run_hash, seed_from_run_hash
 from engine.significance import (
     bootstrap_sharpe_block,
     bootstrap_sharpe_ci,
+    hansens_spa_test,
     permutation_test_sharpe,
     returns_from_equity,
 )
@@ -394,6 +396,8 @@ async def compare_strategies(
 
     # 2. Run every registered strategy
     results = []
+    strategy_returns: list[np.ndarray] = []
+    strategy_types_in_order: list[str] = []
     for strategy_type, strategy_cls in STRATEGY_REGISTRY.items():
         try:
             strategy = strategy_cls()
@@ -431,6 +435,9 @@ async def compare_strategies(
                     },
                 }
             )
+            equity = np.array([v for _, v in result.equity_curve], dtype=np.float64)
+            strategy_returns.append(returns_from_equity(equity))
+            strategy_types_in_order.append(strategy_type)
         except Exception:
             logger.exception("Strategy %s failed during comparison", strategy_type)
 
@@ -439,12 +446,81 @@ async def compare_strategies(
     if results:
         results[0]["winner"] = True
 
+    # 4. Hansen 2005 SPA — answers "is the best of N strategies genuinely
+    #    better than buy-and-hold, or just the lucky winner of N draws?"
+    spa_block = _compute_spa_block(
+        strategy_returns,
+        strategy_types_in_order,
+        bars,
+    )
+
     return {
         "ticker": ticker,
         "start_date": start_date,
         "end_date": end_date,
         "initial_capital": initial_capital,
         "results": results,
+        "spa": spa_block,
+    }
+
+
+def _compute_spa_block(
+    strategy_returns: list[np.ndarray],
+    strategy_types_in_order: list[str],
+    bars,
+) -> dict | None:
+    """Compute Hansen 2005 SPA over the strategy comparison.
+
+    Benchmark is buy-and-hold of the same ticker (close-to-close
+    returns). Skipped (returns ``None``) when fewer than 2 strategies
+    succeeded or when the benchmark series cannot be aligned.
+    """
+    if len(strategy_returns) < 2:
+        logger.info("SPA skipped: only %d strategy result(s)", len(strategy_returns))
+        return None
+
+    # Buy-and-hold benchmark from bar closes.
+    if not bars or len(bars) < 2:
+        logger.info("SPA skipped: insufficient bars for benchmark series")
+        return None
+    closes = np.array([b.close for b in bars], dtype=np.float64)
+    benchmark = np.diff(closes) / closes[:-1]
+
+    # Align: each strategy's equity curve has T+1 points (initial + T bars),
+    # so returns_from_equity yields T values. Bars give T close-to-close
+    # returns. Lengths should match; if not, truncate to the min.
+    min_len = min(len(benchmark), *(len(r) for r in strategy_returns))
+    if min_len < 5:
+        logger.info("SPA skipped: only %d aligned observations", min_len)
+        return None
+    aligned_strats = [r[-min_len:] for r in strategy_returns]
+    aligned_bench = benchmark[-min_len:]
+
+    try:
+        spa = hansens_spa_test(
+            aligned_strats,
+            aligned_bench,
+            n_resamples=5000,
+            seed=42,
+        )
+    except Exception:
+        logger.exception("SPA test failed")
+        return None
+
+    return {
+        "best_strategy_index": spa.best_strategy_index,
+        "best_strategy_type": (
+            strategy_types_in_order[spa.best_strategy_index]
+            if 0 <= spa.best_strategy_index < len(strategy_types_in_order)
+            else None
+        ),
+        "best_sharpe": spa.best_sharpe,
+        "spa_pvalue": spa.spa_pvalue,
+        "spa_pvalue_consistent": spa.spa_pvalue_consistent,
+        "n_strategies": spa.n_strategies,
+        "n_resamples": spa.n_resamples,
+        "n_obs": spa.n_obs,
+        "block_length": spa.block_length,
     }
 
 
@@ -502,8 +578,6 @@ async def significance(req: BacktestRequest):
     together suggest the strategy is doing more than riding the
     underlying return distribution.
     """
-    import numpy as np
-
     strategy_cls = STRATEGY_REGISTRY.get(req.strategy_type)
     if strategy_cls is None:
         raise HTTPException(

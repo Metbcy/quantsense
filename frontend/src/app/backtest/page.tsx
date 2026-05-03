@@ -55,6 +55,7 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { Stat } from "@/components/ui/stat";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FactorExposurePanel } from "@/components/factor-exposure";
 import { useFetch } from "@/lib/hooks";
 import { api } from "@/lib/api";
 import type {
@@ -967,6 +968,8 @@ export default function BacktestPage() {
                   })()}
                 </div>
               )}
+
+              {result && <FactorExposurePanel resultId={result.id} />}
             </CardContent>
           </Card>
         </div>

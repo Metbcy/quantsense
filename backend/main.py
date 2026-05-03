@@ -11,15 +11,32 @@ from contextlib import asynccontextmanager
 
 from config.settings import settings
 from models.database import init_db, SessionLocal
-from models.schemas import Portfolio as PortfolioDB, PortfolioSnapshot, Position as PositionDB
+from models.schemas import (
+    Portfolio as PortfolioDB,
+    PortfolioSnapshot,
+    Position as PositionDB,
+)
 from api.auth import router as auth_router
 from api.backtest import router as backtest_router
+from api.backtest_factors import router as backtest_factors_router
+from api.backtest_portfolio import router as backtest_portfolio_router
 from api.sentiment import router as sentiment_router
 from api.trading import router as trading_router
 from api.market import router as market_router
 from api.settings import router as settings_router
 from api.websocket import router as ws_router
 from api.portfolio_history import router as portfolio_history_router
+
+# NOTE: the OHLCV data layer caches in two stages:
+#   1. ``data.shared.parquet_cache`` — a process-wide ParquetOHLCVCache that
+#      durably stores one Parquet file per ticker under
+#      ``settings.QUANTSENSE_CACHE_DIR``. Built at import time from settings,
+#      so every request handler sharing ``data.shared.provider`` benefits
+#      transparently. Disable with ``QUANTSENSE_CACHE_ENABLED=false``.
+#   2. ``data.cache.CachedDataProvider`` — a thin in-process TTL wrapper for
+#      hot-path deduplication within a single API session.
+# The wiring lives in ``data/shared.py`` so the ``provider`` singleton is
+# constructed once, before any router imports it.
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +70,19 @@ async def _snapshot_loop():
         try:
             db = SessionLocal()
             try:
-                portfolio = db.query(PortfolioDB).filter(PortfolioDB.name == "default").first()
+                portfolio = (
+                    db.query(PortfolioDB).filter(PortfolioDB.name == "default").first()
+                )
                 if portfolio:
-                    positions = db.query(PositionDB).filter(PositionDB.portfolio_id == portfolio.id).all()
+                    positions = (
+                        db.query(PositionDB)
+                        .filter(PositionDB.portfolio_id == portfolio.id)
+                        .all()
+                    )
                     positions_value = sum(
-                        p.current_price * p.quantity for p in positions if p.quantity > 0
+                        p.current_price * p.quantity
+                        for p in positions
+                        if p.quantity > 0
                     )
                     total_value = portfolio.cash + positions_value
                     snap = PortfolioSnapshot(
@@ -82,6 +107,7 @@ async def lifespan(app: FastAPI):
     logger.info("QuantSense API started")
     # Start background sentiment scheduler
     from sentiment.scheduler import start_scheduler, stop_scheduler
+
     start_scheduler()
     snapshot_task = asyncio.create_task(_snapshot_loop())
     yield
@@ -175,11 +201,15 @@ except ImportError:
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(market_router, prefix="/api/market", tags=["market"])
 app.include_router(backtest_router, prefix="/api/backtest", tags=["backtest"])
+app.include_router(backtest_portfolio_router, prefix="/api/backtest", tags=["backtest"])
+app.include_router(backtest_factors_router, prefix="/api/backtest", tags=["backtest"])
 app.include_router(sentiment_router, prefix="/api/sentiment", tags=["sentiment"])
 app.include_router(trading_router, prefix="/api/trading", tags=["trading"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(ws_router, prefix="/api/ws", tags=["websocket"])
-app.include_router(portfolio_history_router, prefix="/api/portfolio", tags=["portfolio"])
+app.include_router(
+    portfolio_history_router, prefix="/api/portfolio", tags=["portfolio"]
+)
 
 
 @app.get("/api/health")
@@ -198,5 +228,9 @@ async def health():
     code = 200 if db_ok else 503
     return JSONResponse(
         status_code=code,
-        content={"status": status, "version": "1.0.0", "database": "ok" if db_ok else "unreachable"},
+        content={
+            "status": status,
+            "version": "1.0.0",
+            "database": "ok" if db_ok else "unreachable",
+        },
     )

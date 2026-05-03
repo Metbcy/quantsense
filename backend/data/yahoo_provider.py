@@ -5,6 +5,7 @@ from typing import Any, Union
 
 import yfinance as yf
 
+from data.parquet_cache import ParquetOHLCVCache
 from data.provider import DataProvider, OHLCVBar, Quote, TickerInfo
 from data.utils import retry_async
 
@@ -24,10 +25,20 @@ def _to_date(value: Union[date, datetime, str]) -> date:
 
 
 class YahooFinanceProvider(DataProvider):
-    """Data provider backed by yfinance."""
+    """Data provider backed by yfinance.
+
+    When a :class:`ParquetOHLCVCache` is supplied (production wiring in
+    :mod:`data.shared`), daily OHLCV requests are routed through the
+    on-disk cache transparently — the call site is unchanged.
+    """
+
+    def __init__(self, cache: ParquetOHLCVCache | None = None) -> None:
+        self._cache = cache
 
     @retry_async(retries=3, delay=1.0, backoff=2.0)
-    async def _fetch_ohlcv(self, ticker: str, start: date, end: date, interval: str) -> Any:
+    async def _fetch_ohlcv(
+        self, ticker: str, start: date, end: date, interval: str
+    ) -> Any:
         return await asyncio.wait_for(
             asyncio.to_thread(
                 lambda: yf.download(
@@ -42,18 +53,18 @@ class YahooFinanceProvider(DataProvider):
             timeout=EXTERNAL_TIMEOUT,
         )
 
-    async def get_ohlcv(
-        self, ticker: str, start, end, interval: str = "1d"
+    async def _raw_ohlcv(
+        self, ticker: str, start: date, end: date, interval: str
     ) -> list[OHLCVBar]:
-        start_d = _to_date(start)
-        end_d = _to_date(end)
         try:
-            df = await self._fetch_ohlcv(ticker, start_d, end_d, interval)
+            df = await self._fetch_ohlcv(ticker, start, end, interval)
             if df is None or (hasattr(df, "empty") and df.empty):
                 return []
 
             # yfinance may return MultiIndex columns for single tickers
-            if hasattr(df, "columns") and isinstance(df.columns, __import__('pandas').MultiIndex):
+            if hasattr(df, "columns") and isinstance(
+                df.columns, __import__("pandas").MultiIndex
+            ):
                 df.columns = df.columns.get_level_values(0)
 
             bars: list[OHLCVBar] = []
@@ -73,18 +84,43 @@ class YahooFinanceProvider(DataProvider):
             logger.error(f"Error fetching OHLCV for {ticker} via Yahoo: {e}")
             return []
 
+    async def get_ohlcv(
+        self, ticker: str, start, end, interval: str = "1d"
+    ) -> list[OHLCVBar]:
+        start_d = _to_date(start)
+        end_d = _to_date(end)
+
+        # Parquet cache only handles daily bars; intraday goes direct.
+        if self._cache is None or not self._cache.enabled or interval != "1d":
+            return await self._raw_ohlcv(ticker, start_d, end_d, interval)
+
+        loop = asyncio.get_running_loop()
+
+        def _sync_fetcher(t: str, s: date, e: date) -> list[OHLCVBar]:
+            future = asyncio.run_coroutine_threadsafe(
+                self._raw_ohlcv(t, s, e, interval), loop
+            )
+            return future.result()
+
+        return await asyncio.to_thread(
+            self._cache.get_or_fetch, ticker, start_d, end_d, _sync_fetcher
+        )
+
     @retry_async(retries=3, delay=1.0)
     async def _fetch_info(self, ticker: str) -> dict:
         async def _do():
             t = await asyncio.to_thread(lambda: yf.Ticker(ticker))
             return await asyncio.to_thread(lambda: t.info)
+
         return await asyncio.wait_for(_do(), timeout=EXTERNAL_TIMEOUT)
 
     async def get_quote(self, ticker: str) -> Quote:
         try:
             info = await self._fetch_info(ticker)
             price = info.get("currentPrice") or info.get("regularMarketPrice", 0.0)
-            prev = info.get("previousClose") or info.get("regularMarketPreviousClose", 0.0)
+            prev = info.get("previousClose") or info.get(
+                "regularMarketPreviousClose", 0.0
+            )
             change = price - prev if price and prev else 0.0
             change_pct = (change / prev * 100) if prev else 0.0
             return Quote(

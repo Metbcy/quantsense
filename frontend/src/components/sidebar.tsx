@@ -15,6 +15,7 @@ import {
   User,
   Sun,
   Moon,
+  Briefcase,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,6 +45,7 @@ const navSections: { label: string; items: NavItem[] }[] = [
     label: "Research",
     items: [
       { href: "/backtest", label: "Backtest", icon: FlaskConical },
+      { href: "/portfolio", label: "Portfolio", icon: Briefcase },
       { href: "/compare", label: "Compare", icon: BarChart3 },
       { href: "/charts", label: "Charts", icon: LineChart },
       { href: "/sentiment", label: "Sentiment", icon: Brain },

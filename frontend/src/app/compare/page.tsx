@@ -28,14 +28,175 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { DatePicker } from "@/components/ui/date-picker";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
+import { Stat } from "@/components/ui/stat";
 import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import type { CompareResponse } from "@/lib/api";
+import type { CompareResponse, SPAResult } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 function formatPct(n: number) {
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+}
+
+// ── SPA helpers ────────────────────────────────────────────────────────────
+//
+// The Hansen 2005 SPA test asks: of N strategies tested, is the *best* one
+// genuinely better than the benchmark, or just the lucky winner of N draws?
+// We emphasize the consistent p-value (Hansen's recommended threshold-
+// recentered version) but show both for transparency.
+
+function spaTone(p: number): "primary" | "neutral" | "muted" {
+  if (p <= 0.05) return "primary";
+  if (p <= 0.1) return "neutral";
+  return "muted";
+}
+
+function spaToneClass(tone: "primary" | "neutral" | "muted") {
+  if (tone === "primary") return "text-primary";
+  if (tone === "neutral") return "text-foreground";
+  return "text-muted-foreground";
+}
+
+function SPAPanel({
+  spa,
+  results,
+}: {
+  spa: SPAResult | null;
+  results: { strategy_name: string; strategy_type: string }[];
+}) {
+  if (!spa) {
+    return (
+      <Card>
+        <CardHeader className="border-b">
+          <CardTitle className="flex items-center gap-2">
+            Hansen SPA test
+            <SPAInfoTip />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <p className="text-xs text-muted-foreground">
+            Statistical significance test is unavailable — at least two
+            successful strategies plus a benchmark series are required.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const consistentTone = spaTone(spa.spa_pvalue_consistent);
+  const naiveTone = spaTone(spa.spa_pvalue);
+
+  // Resolve display name for the winning strategy. Fall back to type id
+  // if the lookup misses (edge case: results re-ordering vs. backend index).
+  const bestName =
+    results.find((r) => r.strategy_type === spa.best_strategy_type)
+      ?.strategy_name ?? spa.best_strategy_type ?? `#${spa.best_strategy_index + 1}`;
+
+  const verdict =
+    consistentTone === "primary"
+      ? "distinguishable from luck against the benchmark"
+      : consistentTone === "neutral"
+        ? "borderline — stronger evidence would need a longer sample"
+        : "not distinguishable from data-mining luck against the benchmark";
+
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle className="flex items-center gap-2">
+          Hansen SPA test
+          <SPAInfoTip />
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <div className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+          <div className="bg-card p-4">
+            <Stat
+              label="Best Sharpe"
+              value={spa.best_sharpe.toFixed(2)}
+              sub={bestName}
+            />
+          </div>
+          <div className="bg-card p-4">
+            <Stat
+              label="SPA p · consistent"
+              value={
+                <span className={spaToneClass(consistentTone)}>
+                  {spa.spa_pvalue_consistent.toFixed(3)}
+                </span>
+              }
+              sub={
+                consistentTone === "primary"
+                  ? "Significant at α=0.05"
+                  : consistentTone === "neutral"
+                    ? "Borderline (0.05–0.10)"
+                    : "Not significant"
+              }
+            />
+          </div>
+          <div className="bg-card p-4">
+            <Stat
+              label="SPA p · naive"
+              value={
+                <span className={spaToneClass(naiveTone)}>
+                  {spa.spa_pvalue.toFixed(3)}
+                </span>
+              }
+              sub="All-recentered (conservative)"
+            />
+          </div>
+          <div className="bg-card p-4">
+            <Stat
+              label="Resamples"
+              value={spa.n_resamples.toLocaleString()}
+              sub={`block ${spa.block_length} · n=${spa.n_obs}`}
+            />
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          <span className="text-foreground">{bestName}</span> is the best
+          of {spa.n_strategies} (Sharpe{" "}
+          <span className="font-mono tabular-nums">
+            {spa.best_sharpe.toFixed(2)}
+          </span>
+          ). Hansen p ={" "}
+          <span
+            className={cn(
+              "font-mono tabular-nums",
+              spaToneClass(consistentTone),
+            )}
+          >
+            {spa.spa_pvalue_consistent.toFixed(3)}
+          </span>{" "}
+          — <span className={spaToneClass(consistentTone)}>{verdict}</span>.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SPAInfoTip() {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Info className="size-3.5 cursor-help text-muted-foreground hover:text-foreground" />
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-sm">
+        SPA (Superior Predictive Ability, Hansen 2005) tests whether the
+        best strategy is genuinely better than the benchmark — or just
+        the lucky winner of the comparison. The consistent p-value is
+        Hansen&apos;s recommended threshold-recentered version. Uses a
+        stationary block bootstrap on autocorrelated returns.
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 export default function ComparePage() {
@@ -90,89 +251,92 @@ export default function ComparePage() {
   }));
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        eyebrow="Analysis"
-        title="Strategy comparison"
-        description="Run all strategies side-by-side against the same ticker and window."
-        actions={
-          <Button onClick={handleCompare} disabled={loading} size="sm">
-            <Play className="mr-1.5 size-3.5" />
-            {loading ? "Running…" : "Compare all"}
-          </Button>
-        }
-      />
-
-      {/* Config */}
-      <Card>
-        <CardContent className="pt-4">
-          <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Ticker</Label>
-              <Input
-                placeholder="AAPL"
-                value={ticker}
-                onChange={(e) => setTicker(e.target.value.toUpperCase())}
-                className="font-mono tabular-nums"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Start date</Label>
-              <DatePicker
-                date={startDate}
-                onDateChange={setStartDate}
-                placeholder="Start date"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">End date</Label>
-              <DatePicker
-                date={endDate}
-                onDateChange={setEndDate}
-                placeholder="End date"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Initial capital</Label>
-              <Input
-                type="number"
-                value={capital}
-                onChange={(e) => setCapital(e.target.value)}
-                className="font-mono tabular-nums"
-              />
-            </div>
-            <Button onClick={handleCompare} disabled={loading}>
+    <TooltipProvider delayDuration={200}>
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          eyebrow="Analysis"
+          title="Strategy comparison"
+          description="Run all strategies side-by-side against the same ticker and window."
+          actions={
+            <Button onClick={handleCompare} disabled={loading} size="sm">
               <Play className="mr-1.5 size-3.5" />
               {loading ? "Running…" : "Compare all"}
             </Button>
-          </div>
-        </CardContent>
-      </Card>
+          }
+        />
 
-      {/* Empty / Loading */}
-      {!data && !loading && (
+        {/* Config */}
         <Card>
-          <CardContent className="py-10">
-            <div className="space-y-3">
-              <Skeleton className="h-6 w-1/3" />
-              <Skeleton className="h-32 w-full" />
-              <p className="pt-2 text-center text-xs text-muted-foreground">
-                Enter a ticker and run comparison to see results.
-              </p>
+          <CardContent className="pt-4">
+            <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Ticker</Label>
+                <Input
+                  placeholder="AAPL"
+                  value={ticker}
+                  onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                  className="font-mono tabular-nums"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Start date</Label>
+                <DatePicker
+                  date={startDate}
+                  onDateChange={setStartDate}
+                  placeholder="Start date"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">End date</Label>
+                <DatePicker
+                  date={endDate}
+                  onDateChange={setEndDate}
+                  placeholder="End date"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Initial capital</Label>
+                <Input
+                  type="number"
+                  value={capital}
+                  onChange={(e) => setCapital(e.target.value)}
+                  className="font-mono tabular-nums"
+                />
+              </div>
+              <Button onClick={handleCompare} disabled={loading}>
+                <Play className="mr-1.5 size-3.5" />
+                {loading ? "Running…" : "Compare all"}
+              </Button>
             </div>
           </CardContent>
         </Card>
-      )}
 
-      {loading && (
-        <div className="space-y-3">
-          <Skeleton className="h-9 w-1/4" />
-          <Skeleton className="h-64 w-full" />
-        </div>
-      )}
+        {/* Empty / Loading */}
+        {!data && !loading && (
+          <Card>
+            <CardContent className="py-10">
+              <div className="space-y-3">
+                <Skeleton className="h-6 w-1/3" />
+                <Skeleton className="h-32 w-full" />
+                <p className="pt-2 text-center text-xs text-muted-foreground">
+                  Enter a ticker and run comparison to see results.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-      {data && !loading && (
-        <div className="flex flex-col gap-5">
+        {loading && (
+          <div className="space-y-3">
+            <Skeleton className="h-9 w-1/4" />
+            <Skeleton className="h-64 w-full" />
+          </div>
+        )}
+
+        {data && !loading && (
+          <div className="flex flex-col gap-5">
+            {/* SPA significance panel — additive, hides cleanly when null */}
+            <SPAPanel spa={data.spa} results={data.results} />
           {/* Ranked table */}
           <Card>
             <CardHeader className="border-b">
@@ -377,6 +541,7 @@ export default function ComparePage() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </TooltipProvider>
   );
 }
