@@ -1,6 +1,6 @@
 # QuantSense
 
-**A research-grade equity backtesting and signal platform.**
+**An equity backtesting and signal platform.**
 
 QuantSense is a single-repo full-stack app for designing equity strategies, backtesting them with realistic execution assumptions, and stress-testing the results with standard statistical methods.
 
